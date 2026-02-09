@@ -1,24 +1,27 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import * as Linking from 'expo-linking';
 import { Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
-import 'react-native-reanimated';
-
-import { useColorScheme } from '@/hooks/use-color-scheme';
-
-export const unstable_settings = {
-  anchor: '(tabs)',
-};
+import { useEffect } from 'react';
 
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
+  // --- DEEP LINK LISTENER ---
+  useEffect(() => {
+    const handleDeepLink = (event: { url: string }) => {
+      console.log("Deep link received:", event.url);
+    };
+
+    const subscription = Linking.addEventListener('url', handleDeepLink);
+    return () => {
+      subscription.remove();
+    };
+  }, []);
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-      </Stack>
-      <StatusBar style="auto" />
-    </ThemeProvider>
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="index" />
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="properties/[id]" options={{ headerShown: true, title: 'Property Details', headerBackTitle: 'Back' }} />
+      <Stack.Screen name="properties/new" options={{ headerShown: true, title: 'Add Property', headerBackTitle: 'Back' }} />
+      <Stack.Screen name="properties/edit/[id]" options={{ headerShown: true, title: 'Edit Property', headerBackTitle: 'Back' }} />
+    </Stack>
   );
 }

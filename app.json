@@ -8,6 +8,11 @@
     "scheme": "easerentmobile",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "platforms": [
+      "android",
+      "ios",
+      "web"
+    ],
     "ios": {
       "supportsTablet": true
     },
@@ -19,7 +24,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.anonymous.easerentmobile"
     },
     "web": {
       "output": "static",
@@ -37,6 +43,22 @@
           "dark": {
             "backgroundColor": "#000000"
           }
+        }
+      ],
+      "@react-native-community/datetimepicker",
+      "expo-web-browser",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "The app accesses your photos to let you set your profile picture."
         }
       ]
     ],
