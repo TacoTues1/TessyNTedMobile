@@ -18,6 +18,8 @@ export default function RootLayout() {
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="index" />
+      <Stack.Screen name="welcome" />
+      <Stack.Screen name="login" />
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="properties/[id]" options={{ headerShown: true, title: 'Property Details', headerBackTitle: 'Back' }} />
       <Stack.Screen name="properties/new" options={{ headerShown: true, title: 'Add Property', headerBackTitle: 'Back' }} />

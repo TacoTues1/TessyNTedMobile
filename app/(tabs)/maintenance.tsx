@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { decode } from 'base64-arraybuffer';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
@@ -7,13 +8,19 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
-  Image, Modal,
+  Image,
+  Modal,
+  Platform,
+  RefreshControl,
   ScrollView,
   StyleSheet,
-  Text, TextInput,
+  Text,
+  TextInput,
   TouchableOpacity,
   View
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { createNotification } from '../../lib/notifications';
 import { supabase } from '../../lib/supabase';
 
 export default function MaintenanceScreen() {
@@ -24,29 +31,36 @@ export default function MaintenanceScreen() {
   const [properties, setProperties] = useState<any[]>([]);
   const [occupiedProperty, setOccupiedProperty] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  // Modals & Forms
+  // Modals
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [showCostModal, setShowCostModal] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
 
   // Search & Filter
   const [searchId, setSearchId] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [showStatusPicker, setShowStatusPicker] = useState(false);
 
   // Active Selections
   const [requestToSchedule, setRequestToSchedule] = useState<any>(null);
   const [requestToComplete, setRequestToComplete] = useState<any>(null);
   const [requestForFeedback, setRequestForFeedback] = useState<any>(null);
+  const [requestToCancel, setRequestToCancel] = useState<any>(null);
+  const [selectedRequest, setSelectedRequest] = useState<string | null>(null);
 
   // Inputs
-  const [scheduleDate, setScheduleDate] = useState('');
+  const [scheduleDate, setScheduleDate] = useState<Date>(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
   const [repairmanName, setRepairmanName] = useState('');
   const [maintenanceCost, setMaintenanceCost] = useState('');
   const [deductFromDeposit, setDeductFromDeposit] = useState(true);
   const [feedbackText, setFeedbackText] = useState('');
+  const [submittingFeedback, setSubmittingFeedback] = useState(false);
+  const [responseText, setResponseText] = useState('');
 
   // Create Request Form
   const [formData, setFormData] = useState({
@@ -59,12 +73,12 @@ export default function MaintenanceScreen() {
   const [uploading, setUploading] = useState(false);
 
   const statusColors: any = {
-    pending: '#FEF3C7', // yellow-100
-    scheduled: '#DBEAFE', // blue-100
-    in_progress: '#FFEDD5', // orange-100
-    completed: '#DCFCE7', // green-100
-    closed: '#F3F4F6', // gray-100
-    cancelled: '#FEE2E2' // red-100
+    pending: '#FEF3C7',
+    scheduled: '#DBEAFE',
+    in_progress: '#FFEDD5',
+    completed: '#DCFCE7',
+    closed: '#F3F4F6',
+    cancelled: '#FEE2E2'
   };
 
   const statusTextColors: any = {
@@ -76,81 +90,129 @@ export default function MaintenanceScreen() {
     cancelled: '#991B1B'
   };
 
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        setSession(session);
-        loadProfile(session.user.id);
-      } else {
-        router.replace('/');
-      }
-    });
-  }, []);
+  const priorityStyles: any = {
+    high: { bg: '#fef2f2', text: '#b91c1c', border: '#fecaca' },
+    normal: { bg: '#f0fdf4', text: '#15803d', border: '#bbf7d0' },
+    low: { bg: '#eff6ff', text: '#1d4ed8', border: '#bfdbfe' }
+  };
 
-  useEffect(() => {
-    if (session && profile) {
-      loadRequests();
-      loadProperties();
-    }
-  }, [session, profile]);
+  async function loadRequestsWithProfile(sess: any, prof: any) {
+    try {
+      let query = supabase
+        .from('maintenance_requests')
+        .select('*, properties(title, landlord)')
+        .order('created_at', { ascending: false });
 
-  async function loadProfile(userId: string) {
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
-    if (data) setProfile(data);
-  }
-
-  async function loadRequests() {
-    let query = supabase
-      .from('maintenance_requests')
-      .select('*, properties(title, landlord), tenant_profile:profiles!maintenance_requests_tenant_fkey(first_name, last_name)')
-      .order('created_at', { ascending: false });
-
-    if (profile?.role === 'tenant') {
-      query = query.eq('tenant', session.user.id);
-    } else if (profile?.role === 'landlord') {
-      const { data: myProps } = await supabase.from('properties').select('id').eq('landlord', session.user.id);
-      if (myProps && myProps.length > 0) {
-        const propIds = myProps.map(p => p.id);
-        query = query.in('property_id', propIds);
-      } else {
-        setRequests([]);
-        setLoading(false);
-        return;
-      }
-    }
-
-    const { data, error } = await query;
-    if (!error) setRequests(data || []);
-    setLoading(false);
-  }
-
-  async function loadProperties() {
-    if (profile?.role === 'tenant') {
-      const { data: occupancy } = await supabase
-        .from('tenant_occupancies')
-        .select('property_id, property:properties(id, title)')
-        .eq('tenant_id', session.user.id)
-        .eq('status', 'active')
-        .maybeSingle();
-
-      if (occupancy && occupancy.property) {
-        const prop = Array.isArray(occupancy.property) ? occupancy.property[0] : occupancy.property;
-        if (prop) {
-          setOccupiedProperty(prop);
-          setProperties([prop]);
-          setFormData(prev => ({ ...prev, property_id: prop.id }));
+      if (prof.role === 'tenant') {
+        query = query.eq('tenant', sess.user.id);
+      } else if (prof.role === 'landlord') {
+        const { data: myProps } = await supabase.from('properties').select('id').eq('landlord', sess.user.id);
+        if (myProps && myProps.length > 0) {
+          query = query.in('property_id', myProps.map((p: any) => p.id));
+        } else {
+          setRequests([]);
+          return;
         }
       }
-    } else if (profile?.role === 'landlord') {
 
-      const { data } = await supabase.from('properties').select('id, title').eq('landlord', session.user.id);
-      setProperties(data || []);
+      const { data, error } = await query;
+      if (error) console.log('Load requests error:', error);
+      setRequests(data || []);
+    } catch (e) {
+      console.log('Load requests exception:', e);
     }
+  }
+
+  async function loadPropertiesWithProfile(sess: any, prof: any) {
+    try {
+      if (prof.role === 'tenant') {
+        const { data: occupancy } = await supabase
+          .from('tenant_occupancies')
+          .select('property_id, property:properties(id, title)')
+          .eq('tenant_id', sess.user.id)
+          .eq('status', 'active')
+          .maybeSingle();
+
+        if (occupancy && occupancy.property) {
+          const prop = Array.isArray(occupancy.property) ? occupancy.property[0] : occupancy.property;
+          if (prop) {
+            setOccupiedProperty(prop);
+            setProperties([prop]);
+            setFormData(prev => ({ ...prev, property_id: prop.id }));
+          }
+        } else {
+          // Fallback: check accepted applications
+          const { data: acceptedApps } = await supabase
+            .from('applications')
+            .select('property_id, property:properties(id, title)')
+            .eq('tenant', sess.user.id)
+            .eq('status', 'accepted');
+
+          const approvedProperties = acceptedApps?.map((app: any) => app.property).filter(Boolean) || [];
+          setProperties(approvedProperties);
+          setOccupiedProperty(null);
+        }
+      } else if (prof.role === 'landlord') {
+        const { data } = await supabase.from('properties').select('id, title').eq('landlord', sess.user.id);
+        setProperties(data || []);
+      }
+    } catch (e) {
+      console.log('Load properties error:', e);
+    }
+  }
+
+  async function initData() {
+    try {
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+
+      if (!currentSession) {
+        router.replace('/');
+        return;
+      }
+
+      setSession(currentSession);
+
+      // Load profile
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', currentSession.user.id)
+        .single();
+
+      if (!profileData) {
+        console.log('No profile found');
+        return;
+      }
+
+      setProfile(profileData);
+
+      // Load requests
+      await loadRequestsWithProfile(currentSession, profileData);
+
+      // Load properties
+      await loadPropertiesWithProfile(currentSession, profileData);
+
+    } catch (e) {
+      console.log('Init error:', e);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    initData();
+  }, []);
+
+  // For pull-to-refresh
+  async function loadRequests() {
+    if (!session || !profile) return;
+    await loadRequestsWithProfile(session, profile);
+    setRefreshing(false);
   }
 
   // --- ACTIONS ---
 
-  async function updateStatus(requestId: string, newStatus: string) {
+  async function updateRequestStatus(requestId: string, newStatus: string) {
     const { error } = await supabase
       .from('maintenance_requests')
       .update({
@@ -160,43 +222,122 @@ export default function MaintenanceScreen() {
       .eq('id', requestId);
 
     if (!error) {
-      Alert.alert('Success', `Status updated to ${newStatus}`);
+      Alert.alert('Success', `Status updated to ${newStatus.replace('_', ' ')}`);
       loadRequests();
-      // Add notification logic here if needed
+
+      // Send notification to tenant
+      const request = requests.find(r => r.id === requestId);
+      if (request && request.tenant) {
+        try {
+          await createNotification(
+            request.tenant,
+            'maintenance',
+            `Maintenance "${request.title}" status updated to ${newStatus.replace('_', ' ')}.`,
+            { actor: session.user.id, link: '/maintenance' }
+          );
+        } catch (e) { console.log('Notification error:', e); }
+      }
     } else {
       Alert.alert('Error', 'Failed to update status');
     }
   }
 
+  // Cancel flow
+  function promptCancel(request: any) {
+    setRequestToCancel(request);
+    setShowCancelModal(true);
+  }
+
+  async function confirmCancel() {
+    if (!requestToCancel) return;
+    await updateRequestStatus(requestToCancel.id, 'cancelled');
+    setShowCancelModal(false);
+    setRequestToCancel(null);
+  }
+
+  // Start Work flow
+  function openStartWorkModal(request: any) {
+    setRequestToSchedule(request);
+    // Default to tomorrow at 9 AM
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(9, 0, 0, 0);
+    setScheduleDate(tomorrow);
+    setRepairmanName('');
+    setShowScheduleModal(true);
+  }
+
+  const onDateChange = (event: any, selectedDate?: Date) => {
+    setShowDatePicker(false);
+    if (selectedDate) {
+      const newDate = new Date(scheduleDate);
+      newDate.setFullYear(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate());
+      setScheduleDate(newDate);
+    }
+  };
+
+  const onTimeChange = (event: any, selectedTime?: Date) => {
+    setShowTimePicker(false);
+    if (selectedTime) {
+      const newDate = new Date(scheduleDate);
+      newDate.setHours(selectedTime.getHours(), selectedTime.getMinutes());
+      setScheduleDate(newDate);
+    }
+  };
+
   async function confirmStartWork() {
-    if (!requestToSchedule || !scheduleDate) {
-      Alert.alert('Error', 'Please enter a start date/time');
+    if (!requestToSchedule) {
+      Alert.alert('Error', 'No request selected');
       return;
     }
 
-    // Basic date validation or parsing can be added here
     const { error } = await supabase
       .from('maintenance_requests')
       .update({
         status: 'in_progress',
-        scheduled_date: new Date().toISOString(), // Using current time as placeholder or parse scheduleDate
+        scheduled_date: scheduleDate.toISOString(),
         repairman_name: repairmanName.trim() || null
       })
       .eq('id', requestToSchedule.id);
 
     if (!error) {
       Alert.alert('Success', 'Work started!');
+
+      // Notify tenant
+      if (requestToSchedule.tenant) {
+        const formattedDate = scheduleDate.toLocaleString();
+        const repairmanInfo = repairmanName.trim() ? ` Assigned repairman: ${repairmanName.trim()}.` : '';
+        try {
+          await createNotification(
+            requestToSchedule.tenant,
+            'maintenance',
+            `Work on "${requestToSchedule.title}" is scheduled to start on ${formattedDate}.${repairmanInfo}`,
+            { actor: session.user.id, link: '/maintenance' }
+          );
+        } catch (e) { console.log('Notification error:', e); }
+      }
+
       setShowScheduleModal(false);
       setRequestToSchedule(null);
       loadRequests();
+    } else {
+      Alert.alert('Error', 'Failed to update request');
     }
+  }
+
+  // Complete with cost flow
+  function openCostModal(request: any) {
+    setRequestToComplete(request);
+    setMaintenanceCost('');
+    setDeductFromDeposit(true);
+    setShowCostModal(true);
   }
 
   async function completeWithCost() {
     if (!requestToComplete) return;
     const cost = parseFloat(maintenanceCost) || 0;
 
-    const { error } = await supabase
+    const { error: updateError } = await supabase
       .from('maintenance_requests')
       .update({
         status: 'completed',
@@ -206,15 +347,16 @@ export default function MaintenanceScreen() {
       })
       .eq('id', requestToComplete.id);
 
-    if (error) {
+    if (updateError) {
       Alert.alert('Error', 'Failed to complete');
       return;
     }
 
+    // Deduct from security deposit if applicable
     if (deductFromDeposit && cost > 0 && requestToComplete.tenant) {
       const { data: occupancy } = await supabase
         .from('tenant_occupancies')
-        .select('id, security_deposit_used')
+        .select('id, security_deposit, security_deposit_used')
         .eq('tenant_id', requestToComplete.tenant)
         .eq('status', 'active')
         .maybeSingle();
@@ -222,7 +364,32 @@ export default function MaintenanceScreen() {
       if (occupancy) {
         const newUsed = (occupancy.security_deposit_used || 0) + cost;
         await supabase.from('tenant_occupancies').update({ security_deposit_used: newUsed }).eq('id', occupancy.id);
+
+        // Notify tenant about deduction
+        try {
+          await createNotification(
+            requestToComplete.tenant,
+            'maintenance',
+            `₱${cost.toLocaleString()} has been deducted from your security deposit for maintenance: "${requestToComplete.title}"`,
+            { actor: session.user.id, link: '/maintenance' }
+          );
+        } catch (e) { console.log('Notification error:', e); }
       }
+    }
+
+    // Notify tenant about completion
+    if (requestToComplete.tenant) {
+      const costMessage = cost > 0
+        ? ` Maintenance cost: ₱${cost.toLocaleString()}${deductFromDeposit ? ' (deducted from security deposit)' : ''}.`
+        : '';
+      try {
+        await createNotification(
+          requestToComplete.tenant,
+          'maintenance',
+          `Maintenance "${requestToComplete.title}" has been completed.${costMessage}`,
+          { actor: session.user.id, link: '/maintenance' }
+        );
+      } catch (e) { console.log('Notification error:', e); }
     }
 
     Alert.alert('Success', 'Maintenance completed');
@@ -231,11 +398,60 @@ export default function MaintenanceScreen() {
     loadRequests();
   }
 
+  // Reply flow (landlord)
+  async function addResponse(requestId: string) {
+    if (!responseText.trim()) return;
+    await updateRequestStatus(requestId, 'in_progress');
+
+    const request = requests.find(r => r.id === requestId);
+    if (request && request.tenant) {
+      try {
+        await createNotification(
+          request.tenant,
+          'maintenance',
+          `Landlord responded to "${request.title}": ${responseText}`,
+          { actor: session.user.id, link: '/maintenance' }
+        );
+      } catch (e) { console.log('Notification error:', e); }
+    }
+
+    setResponseText('');
+    setSelectedRequest(null);
+    Alert.alert('Success', 'Response sent to tenant!');
+  }
+
+  // Feedback flow (tenant)
+  function openFeedbackModal(request: any) {
+    setRequestForFeedback(request);
+    setFeedbackText('');
+    setShowFeedbackModal(true);
+  }
+
+  async function submitFeedback() {
+    if (!requestForFeedback) return;
+    setSubmittingFeedback(true);
+
+    const { error } = await supabase
+      .from('maintenance_requests')
+      .update({ feedback: feedbackText })
+      .eq('id', requestForFeedback.id);
+
+    if (!error) {
+      Alert.alert('Success', 'Feedback submitted! Thank you.');
+      loadRequests();
+      setShowFeedbackModal(false);
+      setRequestForFeedback(null);
+    } else {
+      Alert.alert('Error', 'Failed to submit feedback');
+    }
+    setSubmittingFeedback(false);
+  }
+
   // --- FILE UPLOAD ---
 
   const pickImages = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
       allowsMultipleSelection: true,
       quality: 0.5,
       base64: true,
@@ -248,6 +464,10 @@ export default function MaintenanceScreen() {
       }
       setProofFiles([...proofFiles, ...result.assets]);
     }
+  };
+
+  const removeFile = (index: number) => {
+    setProofFiles(prev => prev.filter((_, i) => i !== index));
   };
 
   const uploadProofFiles = async () => {
@@ -271,7 +491,7 @@ export default function MaintenanceScreen() {
 
   const handleSubmitRequest = async () => {
     if (proofFiles.length === 0) {
-      Alert.alert('Required', 'Please attach at least one photo.');
+      Alert.alert('Required', 'Please attach at least one photo or video as proof.');
       return;
     }
     if (!formData.title || !formData.description) {
@@ -283,14 +503,30 @@ export default function MaintenanceScreen() {
     try {
       const attachmentUrls = await uploadProofFiles();
 
-      const { error } = await supabase.from('maintenance_requests').insert({
+      const { data: insertData, error } = await supabase.from('maintenance_requests').insert({
         ...formData,
         tenant: session.user.id,
         status: 'pending',
         attachment_urls: attachmentUrls
-      });
+      }).select('*, properties(title, landlord)');
 
       if (error) throw error;
+
+      if (insertData && insertData[0]) {
+        const property = insertData[0].properties;
+
+        // Send notification to landlord
+        if (property && property.landlord) {
+          try {
+            await createNotification(
+              property.landlord,
+              'maintenance',
+              `${profile.first_name} ${profile.last_name} submitted a new maintenance request: "${formData.title}"`,
+              { actor: session.user.id, link: '/maintenance' }
+            );
+          } catch (e) { console.log('Notification error:', e); }
+        }
+      }
 
       Alert.alert('Success', 'Request submitted!');
       setShowCreateModal(false);
@@ -304,92 +540,225 @@ export default function MaintenanceScreen() {
     }
   };
 
-  // --- RENDER HELPERS ---
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadRequests();
+  };
 
-  const renderItem = ({ item }: { item: any }) => (
-    <View style={styles.card}>
-      <View style={styles.cardHeader}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Text style={styles.idBadge}>{item.id.substring(0, 8).toUpperCase()}</Text>
-          <View style={[styles.statusBadge, { backgroundColor: statusColors[item.status] || '#f3f4f6' }]}>
-            <Text style={[styles.statusText, { color: statusTextColors[item.status] || '#1f2937' }]}>
-              {item.status.replace('_', ' ')}
-            </Text>
-          </View>
-        </View>
-        <Text style={styles.dateText}>{new Date(item.created_at).toLocaleDateString()}</Text>
-      </View>
-
-      <View style={styles.cardBody}>
-        <Text style={styles.cardTitle}>{item.title}</Text>
-        <Text style={styles.cardSubtitle}>
-          {item.properties?.title} • {item.priority.toUpperCase()} Priority
-        </Text>
-
-        <Text style={styles.description}>{item.description}</Text>
-
-        {/* Images Preview */}
-        {item.attachment_urls && item.attachment_urls.length > 0 && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imageScroll}>
-            {item.attachment_urls.map((url: string, idx: number) => (
-              <Image key={idx} source={{ uri: url }} style={styles.proofImage} />
-            ))}
-          </ScrollView>
-        )}
-
-        {/* Tenant Actions */}
-        {profile?.role === 'tenant' && !['completed', 'closed', 'cancelled'].includes(item.status) && (
-          <TouchableOpacity onPress={() => updateStatus(item.id, 'cancelled')} style={styles.cancelLink}>
-            <Text style={styles.cancelLinkText}>Cancel Request</Text>
-          </TouchableOpacity>
-        )}
-
-        {/* Landlord Actions */}
-        {profile?.role === 'landlord' && item.status !== 'closed' && (
-          <View style={styles.actionRow}>
-            {item.status === 'pending' && (
-              <TouchableOpacity onPress={() => updateStatus(item.id, 'scheduled')} style={[styles.actionBtn, { backgroundColor: '#DBEAFE' }]}>
-                <Text style={[styles.actionBtnText, { color: '#1E40AF' }]}>Mark Scheduled</Text>
-              </TouchableOpacity>
-            )}
-            {item.status === 'scheduled' && (
-              <TouchableOpacity onPress={() => { setRequestToSchedule(item); setShowScheduleModal(true); }} style={[styles.actionBtn, { backgroundColor: '#FFEDD5' }]}>
-                <Text style={[styles.actionBtnText, { color: '#9A3412' }]}>Start Work</Text>
-              </TouchableOpacity>
-            )}
-            {item.status === 'in_progress' && (
-              <TouchableOpacity onPress={() => { setRequestToComplete(item); setShowCostModal(true); }} style={[styles.actionBtn, { backgroundColor: '#DCFCE7' }]}>
-                <Text style={[styles.actionBtnText, { color: '#166534' }]}>Complete</Text>
-              </TouchableOpacity>
-            )}
-            {(item.status === 'completed' || item.status === 'resolved') && (
-              <TouchableOpacity onPress={() => updateStatus(item.id, 'closed')} style={[styles.actionBtn, { backgroundColor: '#F3F4F6' }]}>
-                <Text style={[styles.actionBtnText, { color: '#374151' }]}>Archive</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
-      </View>
-    </View>
-  );
-
+  // --- FILTER ---
   const filteredRequests = requests.filter(req => {
     const matchesStatus = statusFilter === 'all' || req.status === statusFilter;
     const matchesSearch = searchId === '' || req.id.toLowerCase().includes(searchId.toLowerCase());
     return matchesStatus && matchesSearch;
   });
 
+  // --- RENDER CARD ---
+  const renderItem = ({ item }: { item: any }) => {
+    const pStyle = priorityStyles[item.priority] || priorityStyles.normal;
+
+    return (
+      <View style={styles.card}>
+        {/* Header Strip */}
+        <View style={styles.cardHeaderStrip}>
+          <View style={styles.cardHeaderLeft}>
+            <View style={styles.idBadgeWrap}>
+              <Text style={styles.idLabel}>ID:</Text>
+              <Text style={styles.idBadge}>{item.id.substring(0, 8).toUpperCase()}</Text>
+            </View>
+            <View style={[styles.statusBadge, { backgroundColor: statusColors[item.status] || '#f3f4f6' }]}>
+              <Text style={[styles.statusText, { color: statusTextColors[item.status] || '#1f2937' }]}>
+                {item.status?.replace('_', ' ')}
+              </Text>
+            </View>
+          </View>
+          <Text style={styles.dateText}>
+            {new Date(item.created_at).toLocaleDateString()} at {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </Text>
+        </View>
+
+        <View style={styles.cardBody}>
+          {/* Title & Info */}
+          <Text style={styles.cardTitle}>{item.title}</Text>
+
+          <View style={styles.metaRow}>
+            <View style={styles.metaItem}>
+              <Ionicons name="home-outline" size={14} color="#9ca3af" />
+              <Text style={styles.metaText}>{item.properties?.title}</Text>
+            </View>
+            {profile?.role === 'landlord' && item.tenant_profile && (
+              <View style={styles.metaItem}>
+                <Ionicons name="person-outline" size={14} color="#9ca3af" />
+                <Text style={styles.metaText}>
+                  {item.tenant_profile.first_name} {item.tenant_profile.last_name}
+                </Text>
+              </View>
+            )}
+            <View style={[styles.priorityBadge, { backgroundColor: pStyle.bg, borderColor: pStyle.border }]}>
+              <Text style={[styles.priorityText, { color: pStyle.text }]}>
+                {item.priority?.toUpperCase()} PRIORITY
+              </Text>
+            </View>
+          </View>
+
+          {/* Scheduled Date & Repairman */}
+          {item.scheduled_date && (
+            <View style={styles.infoTagsRow}>
+              <View style={styles.scheduleTag}>
+                <Ionicons name="calendar-outline" size={14} color="#c2410c" />
+                <Text style={styles.scheduleTagText}>
+                  Work starts: {new Date(item.scheduled_date).toLocaleString()}
+                </Text>
+              </View>
+              {item.repairman_name && (
+                <View style={styles.repairmanTag}>
+                  <Ionicons name="person-outline" size={14} color="#1d4ed8" />
+                  <Text style={styles.repairmanTagText}>Repairman: {item.repairman_name}</Text>
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* Description */}
+          <View style={styles.descriptionBox}>
+            <Text style={styles.description}>{item.description}</Text>
+          </View>
+
+          {/* Maintenance Cost Display */}
+          {item.maintenance_cost > 0 && (
+            <View style={styles.costTag}>
+              <Ionicons name="cash-outline" size={14} color="#166534" />
+              <Text style={styles.costTagText}>
+                Cost: ₱{Number(item.maintenance_cost).toLocaleString()}
+                {item.cost_deducted_from_deposit ? ' (Deducted from deposit)' : ''}
+              </Text>
+            </View>
+          )}
+
+          {/* Attachments */}
+          {(() => {
+            let urls = item.attachment_urls;
+            if (typeof urls === 'string') {
+              try { urls = JSON.parse(urls); } catch (e) { urls = []; }
+            }
+            if (!Array.isArray(urls) || urls.length === 0) return null;
+            return (
+              <View style={styles.attachmentsSection}>
+                <Text style={styles.attachmentsLabel}>Proof ({urls.length})</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  {urls.map((url: string, idx: number) => (
+                    <Image
+                      key={idx}
+                      source={{ uri: url }}
+                      style={styles.proofImage}
+                      resizeMode="cover"
+                    />
+                  ))}
+                </ScrollView>
+              </View>
+            );
+          })()}
+
+          {/* Feedback Display */}
+          {item.feedback && (
+            <View style={styles.feedbackDisplay}>
+              <Text style={styles.feedbackLabel}>TENANT FEEDBACK</Text>
+              <Text style={styles.feedbackText}>"{item.feedback}"</Text>
+            </View>
+          )}
+
+          {/* --- TENANT ACTIONS --- */}
+          {profile?.role === 'tenant' && (
+            <View style={styles.actionRow}>
+              {/* Cancel button (visible when not completed/closed/cancelled and no scheduled date) */}
+              {!['completed', 'closed', 'cancelled'].includes(item.status) && !item.scheduled_date && (
+                <TouchableOpacity onPress={() => promptCancel(item)} style={styles.cancelBtn}>
+                  <Text style={styles.cancelBtnText}>Cancel Request</Text>
+                </TouchableOpacity>
+              )}
+              {/* Feedback button (visible when closed and no feedback given) */}
+              {item.status === 'closed' && !item.feedback && (
+                <TouchableOpacity onPress={() => openFeedbackModal(item)} style={styles.feedbackBtn}>
+                  <Ionicons name="chatbox-ellipses-outline" size={14} color="#111" />
+                  <Text style={styles.feedbackBtnText}>Leave Feedback</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+
+          {/* --- LANDLORD ACTIONS --- */}
+          {profile?.role === 'landlord' && item.status !== 'closed' && (
+            <View style={styles.actionRow}>
+              {item.status === 'pending' && (
+                <TouchableOpacity onPress={() => updateRequestStatus(item.id, 'scheduled')} style={[styles.actionBtn, { backgroundColor: '#DBEAFE' }]}>
+                  <Text style={[styles.actionBtnText, { color: '#1E40AF' }]}>Mark Scheduled</Text>
+                </TouchableOpacity>
+              )}
+              {item.status === 'scheduled' && (
+                <TouchableOpacity onPress={() => openStartWorkModal(item)} style={[styles.actionBtn, { backgroundColor: '#FFEDD5' }]}>
+                  <Text style={[styles.actionBtnText, { color: '#9A3412' }]}>Start Working</Text>
+                </TouchableOpacity>
+              )}
+              {item.status === 'in_progress' && (
+                <TouchableOpacity onPress={() => openCostModal(item)} style={[styles.actionBtn, { backgroundColor: '#DCFCE7' }]}>
+                  <Text style={[styles.actionBtnText, { color: '#166534' }]}>Mark Completed</Text>
+                </TouchableOpacity>
+              )}
+              {(item.status === 'completed' || item.status === 'resolved') && (
+                <TouchableOpacity onPress={() => updateRequestStatus(item.id, 'closed')} style={[styles.actionBtn, { backgroundColor: '#F3F4F6' }]}>
+                  <Text style={[styles.actionBtnText, { color: '#374151' }]}>Archive/Close</Text>
+                </TouchableOpacity>
+              )}
+              {!['completed', 'closed', 'cancelled'].includes(item.status) && (
+                <TouchableOpacity onPress={() => promptCancel(item)} style={[styles.actionBtn, { backgroundColor: '#FEE2E2' }]}>
+                  <Text style={[styles.actionBtnText, { color: '#991B1B' }]}>Cancel/Reject</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                onPress={() => setSelectedRequest(selectedRequest === item.id ? null : item.id)}
+                style={styles.replyBtn}
+              >
+                <Ionicons name={selectedRequest === item.id ? "close-outline" : "chatbubble-outline"} size={14} color="#374151" />
+                <Text style={styles.replyBtnText}>{selectedRequest === item.id ? 'Cancel' : 'Reply'}</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Reply Input (Landlord) */}
+          {profile?.role === 'landlord' && selectedRequest === item.id && (
+            <View style={styles.replySection}>
+              <TextInput
+                style={styles.replyInput}
+                value={responseText}
+                onChangeText={setResponseText}
+                placeholder="Say something to tenant..."
+                placeholderTextColor="#c4c4c4"
+              />
+              <TouchableOpacity onPress={() => addResponse(item.id)} style={styles.replySendBtn}>
+                <Text style={styles.replySendText}>Send</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </View>
+    );
+  };
+
+  // --- MAIN RENDER ---
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <View>
+        <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>{profile?.role === 'landlord' ? 'Maintenance Board' : 'My Requests'}</Text>
-          <Text style={styles.headerSubtitle}>Track repairs and issues</Text>
+          <Text style={styles.headerSubtitle}>
+            {profile?.role === 'landlord'
+              ? 'Manage and track requests from your properties.'
+              : 'Report issues and track resolution status.'}
+          </Text>
         </View>
         {profile?.role === 'tenant' && (
           <TouchableOpacity onPress={() => setShowCreateModal(true)} style={styles.createBtn}>
-            <Ionicons name="add" size={24} color="white" />
+            <Ionicons name="add" size={22} color="white" />
           </TouchableOpacity>
         )}
       </View>
@@ -399,26 +768,28 @@ export default function MaintenanceScreen() {
         <View style={styles.searchBox}>
           <Ionicons name="search" size={16} color="#9ca3af" />
           <TextInput
-            placeholder="Search ID..."
+            placeholder="Search by Request ID..."
+            placeholderTextColor="#c4c4c4"
             value={searchId}
             onChangeText={setSearchId}
             style={styles.searchInput}
           />
+          {searchId.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchId('')}>
+              <Ionicons name="close-circle" size={18} color="#ccc" />
+            </TouchableOpacity>
+          )}
         </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-          {['all', 'pending', 'scheduled', 'in_progress', 'completed'].map(status => (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
+          {['all', 'pending', 'scheduled', 'in_progress', 'completed', 'closed', 'cancelled'].map(status => (
             <TouchableOpacity
               key={status}
               onPress={() => setStatusFilter(status)}
-              style={[
-                styles.filterChip,
-                statusFilter === status && styles.filterChipActive
-              ]}
+              style={[styles.filterChip, statusFilter === status && styles.filterChipActive]}
             >
-              <Text style={[
-                styles.filterChipText,
-                statusFilter === status && styles.filterChipTextActive
-              ]}>{status.replace('_', ' ').toUpperCase()}</Text>
+              <Text style={[styles.filterChipText, statusFilter === status && styles.filterChipTextActive]}>
+                {status === 'all' ? 'ALL' : status.replace('_', ' ').toUpperCase()}
+              </Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
@@ -426,111 +797,210 @@ export default function MaintenanceScreen() {
 
       {/* List */}
       {loading ? (
-        <ActivityIndicator size="large" color="black" style={{ marginTop: 50 }} />
+        <View style={styles.loadingBox}>
+          <ActivityIndicator size="large" color="#111" />
+          <Text style={styles.loadingText}>Loading maintenance list...</Text>
+        </View>
       ) : (
         <FlatList
           data={filteredRequests}
           renderItem={renderItem}
           keyExtractor={item => item.id}
-          contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
-          ListEmptyComponent={<Text style={styles.emptyText}>No requests found.</Text>}
+          contentContainerStyle={{ padding: 16, paddingBottom: 20 }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <View style={styles.emptyIcon}>
+                <Ionicons name="construct-outline" size={40} color="#d1d5db" />
+              </View>
+              <Text style={styles.emptyTitle}>No requests found</Text>
+              <Text style={styles.emptySubtitle}>
+                {profile?.role === 'tenant'
+                  ? 'Tap + to submit a new maintenance request.'
+                  : 'No maintenance requests from your tenants yet.'}
+              </Text>
+            </View>
+          }
         />
       )}
 
-      {/* --- CREATE MODAL --- */}
+      {/* =================== CREATE REQUEST MODAL =================== */}
       <Modal visible={showCreateModal} animationType="slide" presentationStyle="pageSheet">
-        <View style={styles.modalContainer}>
+        <SafeAreaView style={styles.modalContainer}>
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>New Request</Text>
-            <TouchableOpacity onPress={() => setShowCreateModal(false)}>
-              <Text style={{ color: 'red', fontWeight: 'bold' }}>Cancel</Text>
+            <Text style={styles.modalTitle}>New Maintenance Request</Text>
+            <TouchableOpacity onPress={() => setShowCreateModal(false)} style={styles.modalClose}>
+              <Ionicons name="close" size={20} color="#666" />
             </TouchableOpacity>
           </View>
-          <ScrollView style={styles.modalBody}>
-            <Text style={styles.label}>PROPERTY</Text>
-            <View style={styles.inputDisabled}>
-              <Text>{occupiedProperty?.title || properties[0]?.title || 'No Property'}</Text>
-            </View>
+          <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: 40 }}>
+            {properties.length === 0 ? (
+              <View style={styles.noPropertyBox}>
+                <Ionicons name="alert-circle-outline" size={40} color="#854d0e" />
+                <Text style={styles.noPropertyTitle}>No Active Lease</Text>
+                <Text style={styles.noPropertySub}>You can only submit requests for properties you are currently renting.</Text>
+              </View>
+            ) : (
+              <>
+                {/* Property */}
+                <Text style={styles.label}>PROPERTY</Text>
+                <View style={styles.inputDisabled}>
+                  <Ionicons name="home-outline" size={16} color="#9ca3af" />
+                  <Text style={styles.inputDisabledText}>{occupiedProperty?.title || properties[0]?.title || 'No Property'}</Text>
+                </View>
 
-            <Text style={styles.label}>TITLE</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. Leaking Faucet"
-              value={formData.title}
-              onChangeText={t => setFormData({ ...formData, title: t })}
-            />
+                {/* Title */}
+                <Text style={styles.label}>ISSUE TITLE</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="e.g. Leaking faucet in kitchen"
+                  placeholderTextColor="#c4c4c4"
+                  value={formData.title}
+                  onChangeText={t => setFormData({ ...formData, title: t })}
+                />
 
-            <Text style={styles.label}>PRIORITY</Text>
-            <View style={styles.priorityRow}>
-              {['low', 'normal', 'high'].map(p => (
+                {/* Priority */}
+                <Text style={styles.label}>PRIORITY</Text>
+                <View style={styles.priorityRow}>
+                  {[{ key: 'low', label: 'Low', sub: 'Cosmetic' }, { key: 'normal', label: 'Normal', sub: 'Functional' }, { key: 'high', label: 'High', sub: 'Urgent' }].map(p => (
+                    <TouchableOpacity
+                      key={p.key}
+                      onPress={() => setFormData({ ...formData, priority: p.key })}
+                      style={[styles.priorityChip, formData.priority === p.key && styles.priorityChipActive]}
+                    >
+                      <Text style={[styles.priorityChipText, formData.priority === p.key && { color: 'white' }]}>{p.label}</Text>
+                      <Text style={[styles.priorityChipSub, formData.priority === p.key && { color: 'rgba(255,255,255,0.6)' }]}>{p.sub}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {/* Description */}
+                <Text style={styles.label}>DESCRIPTION</Text>
+                <TextInput
+                  style={[styles.input, { height: 100, textAlignVertical: 'top' }]}
+                  multiline
+                  placeholder="Describe the issue in detail..."
+                  placeholderTextColor="#c4c4c4"
+                  value={formData.description}
+                  onChangeText={t => setFormData({ ...formData, description: t })}
+                />
+
+                {/* Photos */}
+                <Text style={styles.label}>
+                  PROOF (PHOTOS/VIDEOS) <Text style={{ color: '#ef4444' }}>*Required</Text>
+                  <Text style={{ color: '#9ca3af' }}> ({proofFiles.length}/10)</Text>
+                </Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 20 }}>
+                  <TouchableOpacity onPress={pickImages} style={styles.addPhotoBtn}>
+                    <Ionicons name="camera" size={24} color="#666" />
+                    <Text style={styles.addPhotoText}>Add</Text>
+                  </TouchableOpacity>
+                  {proofFiles.map((asset, i) => (
+                    <View key={i} style={styles.previewWrap}>
+                      <Image source={{ uri: asset.uri }} style={styles.previewImage} />
+                      <TouchableOpacity onPress={() => removeFile(i)} style={styles.removeFileBtn}>
+                        <Ionicons name="close" size={12} color="white" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
+
+                {/* Submit */}
                 <TouchableOpacity
-                  key={p}
-                  onPress={() => setFormData({ ...formData, priority: p })}
-                  style={[styles.priorityChip, formData.priority === p && styles.priorityChipActive]}
+                  onPress={handleSubmitRequest}
+                  disabled={uploading}
+                  style={[styles.primaryBtn, uploading && { opacity: 0.5 }]}
                 >
-                  <Text style={formData.priority === p ? { color: 'white' } : { color: 'black' }}>
-                    {p.toUpperCase()}
-                  </Text>
+                  {uploading ? (
+                    <ActivityIndicator color="white" size="small" />
+                  ) : (
+                    <Text style={styles.primaryBtnText}>Submit Request</Text>
+                  )}
                 </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={styles.label}>DESCRIPTION</Text>
-            <TextInput
-              style={[styles.input, { height: 100 }]}
-              multiline
-              placeholder="Describe the issue..."
-              textAlignVertical="top"
-              value={formData.description}
-              onChangeText={t => setFormData({ ...formData, description: t })}
-            />
-
-            <Text style={styles.label}>PHOTOS ({proofFiles.length}/10)</Text>
-            <ScrollView horizontal style={{ marginBottom: 20 }}>
-              <TouchableOpacity onPress={pickImages} style={styles.addPhotoBtn}>
-                <Ionicons name="camera" size={24} color="#666" />
-              </TouchableOpacity>
-              {proofFiles.map((asset, i) => (
-                <Image key={i} source={{ uri: asset.uri }} style={styles.previewImage} />
-              ))}
-            </ScrollView>
-
-            <TouchableOpacity
-              onPress={handleSubmitRequest}
-              disabled={uploading}
-              style={[styles.primaryBtn, uploading && { opacity: 0.5 }]}
-            >
-              <Text style={styles.primaryBtnText}>{uploading ? 'Submitting...' : 'Submit Request'}</Text>
-            </TouchableOpacity>
+              </>
+            )}
           </ScrollView>
+        </SafeAreaView>
+      </Modal>
+
+      {/* =================== CANCEL CONFIRM MODAL =================== */}
+      <Modal visible={showCancelModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalCardIcon}>
+              <Ionicons name="warning-outline" size={28} color="#ef4444" />
+            </View>
+            <Text style={styles.modalCardTitle}>Cancel Maintenance Request?</Text>
+            <Text style={styles.modalCardSub}>
+              Are you sure you want to cancel: "{requestToCancel?.title}"?
+            </Text>
+            <View style={styles.modalActions}>
+              <TouchableOpacity onPress={() => setShowCancelModal(false)} style={styles.secondaryBtn}>
+                <Text style={styles.secondaryBtnText}>No, Keep</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={confirmCancel} style={[styles.primaryBtnSmall, { backgroundColor: '#ef4444' }]}>
+                <Text style={styles.primaryBtnText}>Yes, Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       </Modal>
 
-      {/* --- SCHEDULE MODAL --- */}
+      {/* =================== SCHEDULE / START WORK MODAL =================== */}
       <Modal visible={showScheduleModal} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Start Work</Text>
+            <Text style={styles.modalCardTitle}>Set Start Date & Assign Repairman</Text>
 
-            <Text style={styles.label}>START DATE/TIME (Text)</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="YYYY-MM-DD HH:MM"
-              value={scheduleDate}
-              onChangeText={setScheduleDate}
-            />
+            <Text style={styles.label}>START DATE</Text>
+            <TouchableOpacity onPress={() => setShowDatePicker(true)} style={styles.datePickerBtn}>
+              <Ionicons name="calendar-outline" size={18} color="#111" />
+              <Text style={styles.datePickerText}>
+                {scheduleDate.toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'long', day: 'numeric' })}
+              </Text>
+              <Ionicons name="chevron-down" size={16} color="#9ca3af" />
+            </TouchableOpacity>
+
+            <Text style={styles.label}>START TIME</Text>
+            <TouchableOpacity onPress={() => setShowTimePicker(true)} style={styles.datePickerBtn}>
+              <Ionicons name="time-outline" size={18} color="#111" />
+              <Text style={styles.datePickerText}>
+                {scheduleDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+              </Text>
+              <Ionicons name="chevron-down" size={16} color="#9ca3af" />
+            </TouchableOpacity>
+
+            {showDatePicker && (
+              <DateTimePicker
+                value={scheduleDate}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                minimumDate={new Date()}
+                onChange={onDateChange}
+              />
+            )}
+            {showTimePicker && (
+              <DateTimePicker
+                value={scheduleDate}
+                mode="time"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={onTimeChange}
+              />
+            )}
 
             <Text style={styles.label}>REPAIRMAN NAME (Optional)</Text>
             <TextInput
               style={styles.input}
               placeholder="e.g. Juan Dela Cruz"
+              placeholderTextColor="#c4c4c4"
               value={repairmanName}
               onChangeText={setRepairmanName}
             />
+            <Text style={styles.helperText}>Tenant will see this name on their maintenance request.</Text>
 
             <View style={styles.modalActions}>
               <TouchableOpacity onPress={() => setShowScheduleModal(false)} style={styles.secondaryBtn}>
-                <Text>Cancel</Text>
+                <Text style={styles.secondaryBtnText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={confirmStartWork} style={styles.primaryBtnSmall}>
                 <Text style={styles.primaryBtnText}>Confirm</Text>
@@ -540,35 +1010,49 @@ export default function MaintenanceScreen() {
         </View>
       </Modal>
 
-      {/* --- COST MODAL --- */}
+      {/* =================== COST / COMPLETE MODAL =================== */}
       <Modal visible={showCostModal} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Complete Request</Text>
-            <Text style={{ fontSize: 12, color: '#666', marginBottom: 15 }}>Enter cost if applicable.</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <View style={styles.completeIcon}>
+                <Ionicons name="checkmark" size={22} color="#16a34a" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalCardTitle}>Complete Maintenance</Text>
+                <Text style={{ fontSize: 12, color: '#9ca3af' }}>{requestToComplete?.title}</Text>
+              </View>
+            </View>
 
-            <Text style={styles.label}>COST (PHP)</Text>
+            <Text style={styles.label}>MAINTENANCE COST / EXPENSE (₱)</Text>
             <TextInput
               style={styles.input}
               keyboardType="numeric"
               placeholder="0.00"
+              placeholderTextColor="#c4c4c4"
               value={maintenanceCost}
               onChangeText={setMaintenanceCost}
             />
+            <Text style={styles.helperText}>Leave as 0 if there's no cost to the tenant.</Text>
 
-            <TouchableOpacity
-              style={styles.checkboxRow}
-              onPress={() => setDeductFromDeposit(!deductFromDeposit)}
-            >
-              <Ionicons name={deductFromDeposit ? "checkbox" : "square-outline"} size={20} color="black" />
-              <Text style={{ fontSize: 12 }}>Deduct from Security Deposit</Text>
-            </TouchableOpacity>
+            {parseFloat(maintenanceCost) > 0 && (
+              <TouchableOpacity
+                style={styles.checkboxRow}
+                onPress={() => setDeductFromDeposit(!deductFromDeposit)}
+              >
+                <Ionicons name={deductFromDeposit ? 'checkbox' : 'square-outline'} size={22} color={deductFromDeposit ? '#d97706' : '#9ca3af'} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.checkboxLabel}>Deduct from Security Deposit</Text>
+                  <Text style={styles.checkboxSub}>This amount will be deducted from the tenant's security deposit.</Text>
+                </View>
+              </TouchableOpacity>
+            )}
 
             <View style={styles.modalActions}>
-              <TouchableOpacity onPress={() => setShowCostModal(false)} style={styles.secondaryBtn}>
-                <Text>Cancel</Text>
+              <TouchableOpacity onPress={() => { setShowCostModal(false); setRequestToComplete(null); }} style={styles.secondaryBtn}>
+                <Text style={styles.secondaryBtnText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={completeWithCost} style={[styles.primaryBtnSmall, { backgroundColor: 'green' }]}>
+              <TouchableOpacity onPress={completeWithCost} style={[styles.primaryBtnSmall, { backgroundColor: '#16a34a' }]}>
                 <Text style={styles.primaryBtnText}>Complete</Text>
               </TouchableOpacity>
             </View>
@@ -576,73 +1060,287 @@ export default function MaintenanceScreen() {
         </View>
       </Modal>
 
-    </View>
+      {/* =================== FEEDBACK MODAL =================== */}
+      <Modal visible={showFeedbackModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalCardTitle}>Maintenance Feedback</Text>
+            <Text style={styles.modalCardSub}>
+              How was the resolution for "{requestForFeedback?.title}"?
+            </Text>
+
+            <TextInput
+              style={[styles.input, { height: 100, textAlignVertical: 'top', marginTop: 12 }]}
+              multiline
+              placeholder="Describe your experience..."
+              placeholderTextColor="#c4c4c4"
+              value={feedbackText}
+              onChangeText={setFeedbackText}
+            />
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity onPress={() => setShowFeedbackModal(false)} style={styles.secondaryBtn}>
+                <Text style={styles.secondaryBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={submitFeedback}
+                disabled={submittingFeedback}
+                style={[styles.primaryBtnSmall, submittingFeedback && { opacity: 0.5 }]}
+              >
+                <Text style={styles.primaryBtnText}>{submittingFeedback ? 'Submitting...' : 'Submit Feedback'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F9FAFB' },
-  header: { padding: 20, paddingTop: 60, backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: '#eee', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  headerTitle: { fontSize: 24, fontWeight: '900', textTransform: 'uppercase' },
-  headerSubtitle: { fontSize: 12, color: '#6b7280' },
-  createBtn: { backgroundColor: 'black', width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  container: { flex: 1, backgroundColor: '#f9fafb' },
 
-  filterContainer: { padding: 15, backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: '#eee' },
-  searchBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f3f4f6', paddingHorizontal: 10, borderRadius: 8, marginBottom: 10, height: 40 },
-  searchInput: { flex: 1, marginLeft: 8, fontSize: 14 },
-  filterChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 15, backgroundColor: '#f3f4f6', marginRight: 5 },
-  filterChipActive: { backgroundColor: 'black' },
-  filterChipText: { fontSize: 10, fontWeight: 'bold', color: '#6b7280' },
+  // Header
+  header: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 20, paddingVertical: 16, backgroundColor: 'white',
+    borderBottomWidth: 1, borderBottomColor: '#f3f4f6'
+  },
+  headerTitle: { fontSize: 22, fontWeight: '900', color: '#111', textTransform: 'uppercase' },
+  headerSubtitle: { fontSize: 11, color: '#9ca3af', marginTop: 2 },
+  createBtn: {
+    backgroundColor: '#111', width: 42, height: 42, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center'
+  },
+
+  // Filters
+  filterContainer: {
+    padding: 14, backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: '#f3f4f6'
+  },
+  searchBox: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#f3f4f6',
+    paddingHorizontal: 12, borderRadius: 10, height: 40, gap: 8, marginBottom: 10
+  },
+  searchInput: { flex: 1, fontSize: 14, color: '#111' },
+  filterChip: {
+    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
+    backgroundColor: '#f3f4f6'
+  },
+  filterChipActive: { backgroundColor: '#111' },
+  filterChipText: { fontSize: 10, fontWeight: '700', color: '#6b7280' },
   filterChipTextActive: { color: 'white' },
 
-  card: { backgroundColor: 'white', borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: '#eee', overflow: 'hidden' },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', padding: 12, backgroundColor: '#f9fafb', borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
-  idBadge: { fontFamily: 'monospace', fontSize: 10, backgroundColor: '#e5e7eb', padding: 2, borderRadius: 4 },
-  statusBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
-  statusText: { fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase' },
-  dateText: { fontSize: 10, color: '#9ca3af' },
+  // Loading & Empty
+  loadingBox: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
+  loadingText: { fontSize: 13, color: '#9ca3af' },
+  emptyState: { alignItems: 'center', marginTop: 60 },
+  emptyIcon: {
+    width: 80, height: 80, borderRadius: 40, backgroundColor: '#f3f4f6',
+    alignItems: 'center', justifyContent: 'center', marginBottom: 16
+  },
+  emptyTitle: { fontSize: 18, fontWeight: '800', color: '#111', marginBottom: 6 },
+  emptySubtitle: { fontSize: 13, color: '#9ca3af', textAlign: 'center', lineHeight: 20, paddingHorizontal: 20 },
 
-  cardBody: { padding: 15 },
-  cardTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 2 },
-  cardSubtitle: { fontSize: 11, color: '#6b7280', marginBottom: 10, fontWeight: '600' },
-  description: { fontSize: 13, color: '#374151', lineHeight: 20, marginBottom: 10 },
+  // Card
+  card: {
+    backgroundColor: 'white', borderRadius: 16, marginBottom: 14,
+    borderWidth: 1, borderColor: '#f3f4f6', overflow: 'hidden',
+    shadowColor: '#000', shadowOpacity: 0.03, shadowRadius: 6, elevation: 1
+  },
+  cardHeaderStrip: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    padding: 14, backgroundColor: '#fafafa', borderBottomWidth: 1, borderBottomColor: '#f3f4f6',
+    flexWrap: 'wrap', gap: 8
+  },
+  cardHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  idBadgeWrap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  idLabel: { fontSize: 10, fontWeight: '700', color: '#9ca3af' },
+  idBadge: { fontFamily: 'monospace', fontSize: 10, fontWeight: '700', backgroundColor: '#e5e7eb', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, color: '#111' },
+  statusBadge: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 12 },
+  statusText: { fontSize: 9, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 },
+  dateText: { fontSize: 10, fontWeight: '600', color: '#9ca3af' },
 
-  imageScroll: { flexDirection: 'row', marginBottom: 10 },
-  proofImage: { width: 60, height: 60, borderRadius: 6, marginRight: 8, backgroundColor: '#eee' },
+  cardBody: { padding: 16 },
+  cardTitle: { fontSize: 17, fontWeight: '800', color: '#111', marginBottom: 8 },
 
-  cancelLink: { alignSelf: 'flex-end', padding: 5 },
-  cancelLinkText: { color: 'red', fontSize: 11, fontWeight: 'bold' },
+  metaRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 10 },
+  metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  metaText: { fontSize: 12, color: '#6b7280' },
 
-  actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f3f4f6' },
-  actionBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 },
-  actionBtnText: { fontSize: 11, fontWeight: 'bold' },
+  priorityBadge: {
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4, borderWidth: 1
+  },
+  priorityText: { fontSize: 9, fontWeight: '800' },
 
-  emptyText: { textAlign: 'center', marginTop: 50, color: '#9ca3af' },
+  infoTagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  scheduleTag: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#fff7ed', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#fed7aa'
+  },
+  scheduleTagText: { fontSize: 11, fontWeight: '700', color: '#c2410c' },
+  repairmanTag: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#eff6ff', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#bfdbfe'
+  },
+  repairmanTagText: { fontSize: 11, fontWeight: '700', color: '#1d4ed8' },
 
-  // Modals
-  modalContainer: { flex: 1, backgroundColor: 'white', paddingTop: 20 },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  modalTitle: { fontSize: 18, fontWeight: 'bold' },
+  costTag: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#f0fdf4', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#bbf7d0', marginBottom: 10
+  },
+  costTagText: { fontSize: 11, fontWeight: '700', color: '#166534' },
+
+  descriptionBox: {
+    backgroundColor: '#fafafa', borderRadius: 12, padding: 14, borderWidth: 1,
+    borderColor: '#f3f4f6', marginBottom: 10
+  },
+  description: { fontSize: 13, color: '#374151', lineHeight: 20 },
+
+  attachmentsSection: { marginBottom: 10 },
+  attachmentsLabel: { fontSize: 10, fontWeight: '800', color: '#9ca3af', textTransform: 'uppercase', marginBottom: 6 },
+  proofImage: { width: 100, height: 100, borderRadius: 10, marginRight: 10, backgroundColor: '#eee' },
+
+  feedbackDisplay: {
+    marginTop: 8, padding: 12, backgroundColor: '#fefce8', borderRadius: 10, borderWidth: 1, borderColor: '#fef08a'
+  },
+  feedbackLabel: { fontSize: 9, fontWeight: '800', color: '#854d0e', marginBottom: 4, textTransform: 'uppercase' },
+  feedbackText: { fontSize: 13, color: '#374151', fontStyle: 'italic' },
+
+  // Actions
+  actionRow: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12,
+    paddingTop: 12, borderTopWidth: 1, borderTopColor: '#f3f4f6'
+  },
+  actionBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8 },
+  actionBtnText: { fontSize: 11, fontWeight: '700' },
+
+  cancelBtn: {
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8,
+    borderWidth: 1, borderColor: '#fecaca', backgroundColor: 'white'
+  },
+  cancelBtnText: { fontSize: 11, fontWeight: '700', color: '#ef4444' },
+
+  feedbackBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8,
+    backgroundColor: '#fef9c3',
+  },
+  feedbackBtnText: { fontSize: 11, fontWeight: '700', color: '#111' },
+
+  replyBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 'auto',
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8,
+    borderWidth: 1, borderColor: '#e5e7eb'
+  },
+  replyBtnText: { fontSize: 11, fontWeight: '700', color: '#374151' },
+
+  replySection: {
+    flexDirection: 'row', gap: 8, marginTop: 12, padding: 12,
+    backgroundColor: '#fafafa', borderRadius: 12, borderWidth: 1, borderColor: '#f3f4f6'
+  },
+  replyInput: {
+    flex: 1, borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 8, fontSize: 13, color: '#111', backgroundColor: 'white'
+  },
+  replySendBtn: {
+    backgroundColor: '#111', paddingHorizontal: 16, paddingVertical: 8,
+    borderRadius: 8, alignItems: 'center', justifyContent: 'center'
+  },
+  replySendText: { color: 'white', fontSize: 12, fontWeight: '700' },
+
+  // Modals — Shared
+  modalContainer: { flex: 1, backgroundColor: 'white' },
+  modalHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#f3f4f6'
+  },
+  modalTitle: { fontSize: 18, fontWeight: '800', color: '#111' },
+  modalClose: {
+    width: 36, height: 36, borderRadius: 18, backgroundColor: '#f3f4f6',
+    alignItems: 'center', justifyContent: 'center'
+  },
   modalBody: { padding: 20 },
 
-  label: { fontSize: 10, fontWeight: 'bold', color: '#6b7280', marginBottom: 5, marginTop: 15 },
-  input: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 8, padding: 12, fontSize: 14, backgroundColor: '#fff' },
-  inputDisabled: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 8, padding: 12, backgroundColor: '#f9fafb' },
-
-  priorityRow: { flexDirection: 'row', gap: 10 },
-  priorityChip: { flex: 1, padding: 10, borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 8, alignItems: 'center' },
-  priorityChipActive: { backgroundColor: 'black', borderColor: 'black' },
-
-  addPhotoBtn: { width: 80, height: 80, borderWidth: 1, borderColor: '#e5e7eb', borderStyle: 'dashed', borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
-  previewImage: { width: 80, height: 80, borderRadius: 8, marginRight: 10 },
-
-  primaryBtn: { backgroundColor: 'black', padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 20, marginBottom: 50 },
-  primaryBtnText: { color: 'white', fontWeight: 'bold' },
-
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
-  modalCard: { backgroundColor: 'white', borderRadius: 16, padding: 20 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: 20 },
+  modalCard: { backgroundColor: 'white', borderRadius: 20, padding: 24 },
+  modalCardIcon: {
+    width: 52, height: 52, borderRadius: 26, backgroundColor: '#fef2f2',
+    alignItems: 'center', justifyContent: 'center', alignSelf: 'center', marginBottom: 16
+  },
+  completeIcon: {
+    width: 44, height: 44, borderRadius: 22, backgroundColor: '#dcfce7',
+    alignItems: 'center', justifyContent: 'center'
+  },
+  modalCardTitle: { fontSize: 17, fontWeight: '800', color: '#111', textAlign: 'center', marginBottom: 6 },
+  modalCardSub: { fontSize: 13, color: '#9ca3af', textAlign: 'center', marginBottom: 16 },
   modalActions: { flexDirection: 'row', gap: 10, marginTop: 20 },
-  secondaryBtn: { flex: 1, padding: 12, borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 8, alignItems: 'center' },
-  primaryBtnSmall: { flex: 1, padding: 12, backgroundColor: 'black', borderRadius: 8, alignItems: 'center' },
-  checkboxRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
+
+  // Form Elements
+  label: { fontSize: 10, fontWeight: '800', color: '#6b7280', marginBottom: 6, marginTop: 16, textTransform: 'uppercase', letterSpacing: 0.5 },
+  input: {
+    borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, paddingHorizontal: 14,
+    paddingVertical: 12, fontSize: 14, color: '#111', backgroundColor: 'white'
+  },
+  inputDisabled: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, paddingHorizontal: 14,
+    paddingVertical: 12, backgroundColor: '#fafafa'
+  },
+  inputDisabledText: { fontSize: 14, fontWeight: '600', color: '#111' },
+  helperText: { fontSize: 10, color: '#9ca3af', marginTop: 4 },
+
+  datePickerBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    borderWidth: 1.5, borderColor: '#e5e7eb', borderRadius: 12,
+    paddingHorizontal: 14, paddingVertical: 14, backgroundColor: '#fafafa'
+  },
+  datePickerText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#111' },
+
+  priorityRow: { flexDirection: 'row', gap: 8 },
+  priorityChip: {
+    flex: 1, padding: 12, borderWidth: 1.5, borderColor: '#e5e7eb',
+    borderRadius: 12, alignItems: 'center'
+  },
+  priorityChipActive: { backgroundColor: '#111', borderColor: '#111' },
+  priorityChipText: { fontSize: 13, fontWeight: '700', color: '#111' },
+  priorityChipSub: { fontSize: 9, color: '#9ca3af', marginTop: 2 },
+
+  addPhotoBtn: {
+    width: 80, height: 80, borderWidth: 2, borderColor: '#e5e7eb', borderStyle: 'dashed',
+    borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 10, gap: 2
+  },
+  addPhotoText: { fontSize: 10, color: '#666', fontWeight: '600' },
+  previewWrap: { position: 'relative', marginRight: 10 },
+  previewImage: { width: 80, height: 80, borderRadius: 12 },
+  removeFileBtn: {
+    position: 'absolute', top: -6, right: -6, width: 20, height: 20, borderRadius: 10,
+    backgroundColor: '#ef4444', alignItems: 'center', justifyContent: 'center'
+  },
+
+  noPropertyBox: {
+    padding: 30, alignItems: 'center', backgroundColor: '#fefce8', borderRadius: 16,
+    borderWidth: 1, borderColor: '#fef08a'
+  },
+  noPropertyTitle: { fontSize: 16, fontWeight: '800', color: '#854d0e', marginTop: 12, marginBottom: 6 },
+  noPropertySub: { fontSize: 13, color: '#a16207', textAlign: 'center', lineHeight: 20 },
+
+  checkboxRow: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginTop: 12,
+    padding: 12, backgroundColor: '#fffbeb', borderRadius: 12, borderWidth: 1, borderColor: '#fef3c7'
+  },
+  checkboxLabel: { fontSize: 13, fontWeight: '700', color: '#92400e' },
+  checkboxSub: { fontSize: 10, color: '#b45309', marginTop: 2 },
+
+  // Buttons
+  primaryBtn: {
+    backgroundColor: '#111', padding: 16, borderRadius: 14, alignItems: 'center', marginTop: 24
+  },
+  primaryBtnText: { color: 'white', fontWeight: '700', fontSize: 14 },
+  primaryBtnSmall: {
+    flex: 1, padding: 14, backgroundColor: '#111', borderRadius: 12, alignItems: 'center'
+  },
+  secondaryBtn: {
+    flex: 1, padding: 14, borderWidth: 1.5, borderColor: '#e5e7eb', borderRadius: 12, alignItems: 'center'
+  },
+  secondaryBtnText: { fontWeight: '700', fontSize: 14, color: '#374151' },
 });

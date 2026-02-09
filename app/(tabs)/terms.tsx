@@ -8,9 +8,9 @@ export default function Terms() {
   const router = useRouter();
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+        <TouchableOpacity onPress={() => router.replace('/login')} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={24} color="black" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Terms & Privacy</Text>
@@ -93,7 +93,7 @@ const styles = StyleSheet.create({
   backBtn: { padding: 5 },
 
   headerTitle: { fontSize: 16, fontWeight: 'bold' },
-  scrollContent: { padding: 24, paddingBottom: 50 },
+  scrollContent: { padding: 24, paddingBottom: 20 },
 
   mb8: { marginBottom: 30, borderBottomWidth: 1, borderBottomColor: '#eee', paddingBottom: 20 },
   mainTitle: { fontSize: 30, fontWeight: '900', color: 'black', marginBottom: 8 },

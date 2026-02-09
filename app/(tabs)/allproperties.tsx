@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
     ActivityIndicator,
@@ -17,21 +17,21 @@ const { width } = Dimensions.get('window');
 
 export default function AllProperties() {
     const router = useRouter();
-    const params = useLocalSearchParams();
 
     // -- STATE --
     const [properties, setProperties] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [session, setSession] = useState<any>(null);
+    const [profile, setProfile] = useState<any>(null);
 
     // Search & Filter State
     const [searchQuery, setSearchQuery] = useState('');
     const [priceRange, setPriceRange] = useState({ min: '', max: '' });
     const [selectedAmenities, setSelectedAmenities] = useState<string[]>([]);
-    const [minRating, setMinRating] = useState(0); // Ported
-    const [filterMostFavorite, setFilterMostFavorite] = useState(false); // Ported
-    const [sortBy, setSortBy] = useState('newest'); // newest, price_asc, price_desc, rating
+    const [minRating, setMinRating] = useState(0);
+    const [filterMostFavorite, setFilterMostFavorite] = useState(false);
+    const [sortBy, setSortBy] = useState('newest');
 
     // Comparison & Favorites
     const [comparisonList, setComparisonList] = useState<any[]>([]);
@@ -55,19 +55,27 @@ export default function AllProperties() {
     const checkAuthAndLoad = async () => {
         const { data: { session } } = await supabase.auth.getSession();
         setSession(session);
+
+        if (session?.user?.id) {
+            const { data: prof } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
+            setProfile(prof);
+        }
+
         loadProperties(session?.user?.id);
     };
 
     const loadProperties = async (userId?: string) => {
         setLoading(true);
         try {
-            // 1. Fetch Properties
-            const { data: props, error } = await supabase
+            let query = supabase
                 .from('properties')
                 .select('*, landlord_profile:profiles!properties_landlord_fkey(first_name, last_name)')
-                .eq('is_deleted', false)
-                .eq('status', 'available'); // Only show available by default? Next.js shows all but badges them.
+                .eq('is_deleted', false);
 
+            // Always show available properties for browsing
+            query = query.eq('status', 'available');
+
+            const { data: props, error } = await query;
             if (error) throw error;
 
             // 2. Fetch Stats (Ratings, Counts)
@@ -142,31 +150,25 @@ export default function AllProperties() {
         setSortBy('newest');
     };
 
-    // --- FILTERING LOGIC (Ported from Next.js) ---
+    // --- FILTERING LOGIC ---
     const getFilteredProperties = () => {
         return properties.filter(item => {
             const stats = propertyStats[item.id] || { avg_rating: 0, review_count: 0, favorite_count: 0 };
 
-            // Search
             const matchSearch = item.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
                 item.city?.toLowerCase().includes(searchQuery.toLowerCase());
             if (!matchSearch) return false;
 
-            // Price
             if (priceRange.min && item.price < parseFloat(priceRange.min)) return false;
             if (priceRange.max && item.price > parseFloat(priceRange.max)) return false;
 
-            // Amenities (AND logic)
             if (selectedAmenities.length > 0) {
                 const itemAmenities = item.amenities || [];
                 const hasAll = selectedAmenities.every(a => itemAmenities.includes(a));
                 if (!hasAll) return false;
             }
 
-            // Rating
             if (minRating > 0 && (stats.avg_rating || 0) < minRating) return false;
-
-            // Favorites Filter
             if (filterMostFavorite && (stats.favorite_count || 0) < 1) return false;
 
             return true;
@@ -207,7 +209,7 @@ export default function AllProperties() {
                     <View style={styles.badgeContainer}>
                         <View style={[styles.badge, { backgroundColor: item.status === 'available' ? 'white' : '#fee2e2' }]}>
                             <Text style={[styles.badgeText, { color: item.status === 'available' ? 'black' : '#ef4444' }]}>
-                                {item.status === 'available' ? 'AVAILABLE' : 'OCCUPIED'}
+                                {item.status === 'available' ? 'AVAILABLE' : item.status?.toUpperCase() || 'OCCUPIED'}
                             </Text>
                         </View>
                         {stats.favorite_count > 0 && (
@@ -231,9 +233,10 @@ export default function AllProperties() {
                         </TouchableOpacity>
                     </View>
 
+
                     {/* Price Overlay */}
                     <View style={styles.priceOverlay}>
-                        <Text style={styles.priceText}>₱{item.price.toLocaleString()}</Text>
+                        <Text style={styles.priceText}>₱{(item.price || 0).toLocaleString()}</Text>
                         <Text style={styles.periodText}>/mo</Text>
                     </View>
                 </View>
@@ -242,7 +245,10 @@ export default function AllProperties() {
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                         <View style={{ flex: 1 }}>
                             <Text style={styles.cardTitle} numberOfLines={1}>{item.title}</Text>
-                            <Text style={styles.cardAddress} numberOfLines={1}>{item.city}</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                                <Ionicons name="location-outline" size={12} color="#9ca3af" />
+                                <Text style={styles.cardAddress} numberOfLines={1}>{item.city}</Text>
+                            </View>
                         </View>
                         {/* Rating */}
                         {stats.review_count > 0 && (
@@ -264,19 +270,34 @@ export default function AllProperties() {
                         <Ionicons name="resize-outline" size={14} color="#666" />
                         <Text style={styles.metaText}>{item.area_sqft} sqm</Text>
                     </View>
+
+                    {/* Landlord info (only in browse mode) */}
+                    {item.landlord_profile && (
+                        <View style={styles.landlordRow}>
+                            <View style={styles.landlordAvatar}>
+                                <Text style={{ color: 'white', fontSize: 10, fontWeight: 'bold' }}>
+                                    {item.landlord_profile.first_name?.[0]?.toUpperCase() || 'L'}
+                                </Text>
+                            </View>
+                            <Text style={styles.landlordName}>
+                                {item.landlord_profile.first_name} {item.landlord_profile.last_name}
+                            </Text>
+                        </View>
+                    )}
                 </View>
             </TouchableOpacity>
         );
     };
 
     return (
-        <SafeAreaView style={styles.container}>
+        <SafeAreaView style={styles.container} edges={['top']}>
             {/* Header & Search */}
             <View style={styles.header}>
                 <View style={styles.searchBar}>
-                    <Ionicons name="search" size={20} color="#666" />
+                    <Ionicons name="search" size={18} color="#9ca3af" />
                     <TextInput
-                        placeholder="Search city, title..."
+                        placeholder="Search by city, title, or keyword..."
+                        placeholderTextColor="#c4c4c4"
                         style={styles.searchInput}
                         value={searchQuery}
                         onChangeText={setSearchQuery}
@@ -288,11 +309,19 @@ export default function AllProperties() {
                     )}
                 </View>
                 <TouchableOpacity style={styles.filterBtn} onPress={() => setShowFilterModal(true)}>
-                    <Ionicons name="options-outline" size={24} color="black" />
+                    <Ionicons name="options-outline" size={22} color="black" />
                 </TouchableOpacity>
             </View>
 
-            {/* Active Filters Horizontal Scroll */}
+            {/* Page Title */}
+            <View style={styles.pageTitleBar}>
+                <Text style={styles.pageTitle}>Browse Properties</Text>
+                <View style={styles.resultBadge}>
+                    <Text style={styles.resultBadgeText}>{filteredData.length}</Text>
+                </View>
+            </View>
+
+            {/* Active Filters */}
             {(selectedAmenities.length > 0 || minRating > 0 || filterMostFavorite) && (
                 <View style={{ height: 50 }}>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 20, alignItems: 'center', gap: 8 }}>
@@ -326,15 +355,17 @@ export default function AllProperties() {
                 <View style={styles.center}><ActivityIndicator size="large" color="black" /></View>
             ) : (
                 <ScrollView
-                    contentContainerStyle={{ padding: 20, paddingBottom: 100 }}
+                    contentContainerStyle={{ padding: 20, paddingBottom: 30 }}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadProperties(session?.user?.id)} />}
                 >
-                    <Text style={styles.resultCount}>{filteredData.length} Properties Found</Text>
                     {filteredData.map(renderCard)}
                     {filteredData.length === 0 && (
-                        <View style={styles.center}>
-                            <Ionicons name="home-outline" size={48} color="#ddd" />
-                            <Text style={{ color: '#999', marginTop: 10 }}>No properties match your filters.</Text>
+                        <View style={styles.emptyState}>
+                            <View style={styles.emptyIcon}>
+                                <Ionicons name="home-outline" size={40} color="#d1d5db" />
+                            </View>
+                            <Text style={styles.emptyTitle}>No properties found</Text>
+                            <Text style={styles.emptySubtitle}>Try adjusting your search or filters.</Text>
                         </View>
                     )}
                 </ScrollView>
@@ -356,8 +387,15 @@ export default function AllProperties() {
             <Modal visible={showFilterModal} animationType="slide" presentationStyle="pageSheet">
                 <View style={styles.modalContainer}>
                     <View style={styles.modalHeader}>
-                        <Text style={styles.modalTitle}>Filters</Text>
-                        <TouchableOpacity onPress={() => setShowFilterModal(false)}><Ionicons name="close" size={24} /></TouchableOpacity>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                            <View style={styles.modalHeaderIcon}>
+                                <Ionicons name="filter" size={18} color="white" />
+                            </View>
+                            <Text style={styles.modalTitle}>Filters</Text>
+                        </View>
+                        <TouchableOpacity onPress={() => setShowFilterModal(false)} style={styles.modalCloseBtn}>
+                            <Ionicons name="close" size={20} color="#666" />
+                        </TouchableOpacity>
                     </View>
                     <ScrollView contentContainerStyle={{ padding: 20 }}>
 
@@ -396,12 +434,20 @@ export default function AllProperties() {
                         <Text style={styles.filterLabel}>Price Range (₱)</Text>
                         <View style={{ flexDirection: 'row', gap: 10, marginBottom: 20 }}>
                             <TextInput
-                                style={styles.input} placeholder="Min" keyboardType="numeric"
-                                value={priceRange.min} onChangeText={t => setPriceRange(p => ({ ...p, min: t }))}
+                                style={styles.input}
+                                placeholder="Min price e.g. 5000"
+                                placeholderTextColor="#c4c4c4"
+                                keyboardType="numeric"
+                                value={priceRange.min}
+                                onChangeText={t => setPriceRange(p => ({ ...p, min: t }))}
                             />
                             <TextInput
-                                style={styles.input} placeholder="Max" keyboardType="numeric"
-                                value={priceRange.max} onChangeText={t => setPriceRange(p => ({ ...p, max: t }))}
+                                style={styles.input}
+                                placeholder="Max price e.g. 30000"
+                                placeholderTextColor="#c4c4c4"
+                                keyboardType="numeric"
+                                value={priceRange.max}
+                                onChangeText={t => setPriceRange(p => ({ ...p, max: t }))}
                             />
                         </View>
 
@@ -419,7 +465,10 @@ export default function AllProperties() {
                     </ScrollView>
 
                     <View style={styles.modalFooter}>
-                        <TouchableOpacity onPress={clearFilters} style={{ padding: 15 }}><Text style={{ fontWeight: 'bold', color: '#666' }}>Clear</Text></TouchableOpacity>
+                        <TouchableOpacity onPress={clearFilters} style={styles.clearBtn}>
+                            <Ionicons name="refresh" size={16} color="#666" />
+                            <Text style={{ fontWeight: '600', color: '#666', marginLeft: 4 }}>Clear</Text>
+                        </TouchableOpacity>
                         <TouchableOpacity onPress={() => setShowFilterModal(false)} style={styles.applyBtn}>
                             <Text style={{ color: 'white', fontWeight: 'bold' }}>Show {filteredData.length} Homes</Text>
                         </TouchableOpacity>
@@ -434,40 +483,55 @@ const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#f9fafb' },
     center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-    header: { flexDirection: 'row', padding: 20, gap: 10, alignItems: 'center', backgroundColor: 'white' },
-    searchBar: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#f3f4f6', paddingHorizontal: 15, height: 45, borderRadius: 12 },
-    searchInput: { flex: 1, marginLeft: 10, fontSize: 14 },
-    filterBtn: { width: 45, height: 45, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: '#eee' },
+    header: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 12, gap: 10, alignItems: 'center', backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
+    backBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center' },
+    searchBar: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#f3f4f6', paddingHorizontal: 14, height: 44, borderRadius: 14, gap: 8 },
+    searchInput: { flex: 1, fontSize: 14, color: '#111' },
+    filterBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', borderRadius: 14, borderWidth: 1.5, borderColor: '#e5e7eb' },
 
-    resultCount: { fontSize: 12, fontWeight: 'bold', color: '#666', marginBottom: 10 },
+    // Page Title
+    pageTitleBar: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 20, paddingTop: 16, paddingBottom: 8 },
+    pageTitle: { fontSize: 22, fontWeight: '800', color: '#111' },
+    resultBadge: { backgroundColor: '#111', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3 },
+    resultBadgeText: { color: 'white', fontSize: 11, fontWeight: 'bold' },
 
     activeFilterChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'black', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 15, gap: 5 },
     activeFilterText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
 
     // Card Styles
-    card: { backgroundColor: 'white', borderRadius: 16, marginBottom: 20, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, elevation: 3, overflow: 'hidden' },
-    imageContainer: { height: 220, position: 'relative' },
+    card: { backgroundColor: 'white', borderRadius: 20, marginBottom: 16, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 12, elevation: 3, overflow: 'hidden' },
+    imageContainer: { height: 200, position: 'relative' },
     cardImage: { width: '100%', height: '100%' },
     gradient: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 100 },
 
     badgeContainer: { position: 'absolute', top: 12, left: 12, flexDirection: 'row', gap: 6 },
-    badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(0,0,0,0.05)' },
+    badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(0,0,0,0.05)' },
     badgeText: { fontSize: 10, fontWeight: 'bold' },
 
     actionsContainer: { position: 'absolute', top: 12, right: 12, flexDirection: 'column', gap: 8 },
-    iconBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4 },
+    iconBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 2 },
 
-    priceOverlay: { position: 'absolute', bottom: 12, left: 12 },
-    priceText: { color: 'white', fontSize: 20, fontWeight: '900', textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 },
-    periodText: { color: 'rgba(255,255,255,0.8)', fontSize: 10, fontWeight: 'bold' },
+    priceOverlay: { position: 'absolute', bottom: 12, left: 12, flexDirection: 'row', alignItems: 'baseline' },
+    priceText: { color: 'white', fontSize: 22, fontWeight: '900', textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 4 },
+    periodText: { color: 'rgba(255,255,255,0.8)', fontSize: 11, fontWeight: 'bold', marginLeft: 2 },
 
-    cardContent: { padding: 15 },
-    cardTitle: { fontSize: 16, fontWeight: 'bold', color: '#111' },
-    cardAddress: { fontSize: 12, color: '#666', marginTop: 2 },
-    ratingBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fffbeb', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+    cardContent: { padding: 16 },
+    cardTitle: { fontSize: 16, fontWeight: '700', color: '#111' },
+    cardAddress: { fontSize: 12, color: '#9ca3af' },
+    ratingBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fffbeb', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
 
-    metaBox: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f3f4f6' },
+    metaBox: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#f3f4f6' },
     metaText: { fontSize: 12, color: '#444', fontWeight: '500' },
+
+    landlordRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f3f4f6' },
+    landlordAvatar: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#111', alignItems: 'center', justifyContent: 'center' },
+    landlordName: { fontSize: 12, color: '#666', fontWeight: '500' },
+
+    // Empty State
+    emptyState: { alignItems: 'center', paddingTop: 60 },
+    emptyIcon: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+    emptyTitle: { fontSize: 18, fontWeight: '700', color: '#111' },
+    emptySubtitle: { fontSize: 14, color: '#9ca3af', marginTop: 4, textAlign: 'center' },
 
     // Floating Compare Button
     compareFloatBtn: { position: 'absolute', bottom: 30, alignSelf: 'center', backgroundColor: '#111', flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 24, borderRadius: 30, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 10, elevation: 10, zIndex: 100 },
@@ -476,14 +540,17 @@ const styles = StyleSheet.create({
     // Filter Modal
     modalContainer: { flex: 1, backgroundColor: 'white' },
     modalHeader: { padding: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
-    modalTitle: { fontSize: 18, fontWeight: 'bold' },
-    filterLabel: { fontSize: 12, fontWeight: 'bold', color: '#666', textTransform: 'uppercase', marginBottom: 10, marginTop: 10 },
+    modalHeaderIcon: { width: 36, height: 36, borderRadius: 10, backgroundColor: '#111', alignItems: 'center', justifyContent: 'center' },
+    modalCloseBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center' },
+    modalTitle: { fontSize: 18, fontWeight: '800' },
+    filterLabel: { fontSize: 12, fontWeight: '700', color: '#666', textTransform: 'uppercase', marginBottom: 10, marginTop: 10, letterSpacing: 0.5 },
     chipContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 15 },
-    chip: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, borderWidth: 1, borderColor: '#e5e7eb', backgroundColor: 'white', flexDirection: 'row', alignItems: 'center' },
-    chipActive: { backgroundColor: 'black', borderColor: 'black' },
-    chipText: { fontSize: 12, fontWeight: 'bold', color: '#333' },
-    input: { flex: 1, borderWidth: 1, borderColor: '#e5e7eb', padding: 12, borderRadius: 10, backgroundColor: '#f9fafb' },
+    chip: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, borderWidth: 1.5, borderColor: '#e5e7eb', backgroundColor: 'white', flexDirection: 'row', alignItems: 'center' },
+    chipActive: { backgroundColor: '#111', borderColor: '#111' },
+    chipText: { fontSize: 12, fontWeight: '600', color: '#333' },
+    input: { flex: 1, borderWidth: 1.5, borderColor: '#e5e7eb', padding: 14, borderRadius: 14, backgroundColor: '#fafafa', fontSize: 14 },
 
     modalFooter: { padding: 20, borderTopWidth: 1, borderTopColor: '#f3f4f6', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    applyBtn: { backgroundColor: 'black', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 12 },
+    clearBtn: { flexDirection: 'row', alignItems: 'center', padding: 14 },
+    applyBtn: { backgroundColor: '#111', paddingHorizontal: 28, paddingVertical: 14, borderRadius: 14 },
 });

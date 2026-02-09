@@ -1,194 +1,797 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, TextInput, FlatList, TouchableOpacity, Image, StyleSheet, Modal, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
 import { decode } from 'base64-arraybuffer';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as ImagePicker from 'expo-image-picker';
+import * as Sharing from 'expo-sharing';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+    ActivityIndicator, Alert,
+    Dimensions,
+    FlatList,
+    Image,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    StyleSheet,
+    Text, TextInput,
+    TouchableOpacity,
+    View
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../../lib/supabase';
 
+const { width } = Dimensions.get('window');
+
 export default function Messages() {
-  const [session, setSession] = useState<any>(null);
-  const [conversations, setConversations] = useState<any[]>([]);
-  const [selectedConv, setSelectedConv] = useState<any>(null);
-  const [messages, setMessages] = useState<any[]>([]);
-  const [text, setText] = useState('');
-  const [users, setUsers] = useState<any[]>([]); // For search
-  const [showNewModal, setShowNewModal] = useState(false);
-  const flatListRef = useRef<FlatList>(null);
+    const [session, setSession] = useState<any>(null);
+    const [profile, setProfile] = useState<any>(null);
+    const [conversations, setConversations] = useState<any[]>([]);
+    const [selectedConv, setSelectedConv] = useState<any>(null);
+    const [messages, setMessages] = useState<any[]>([]);
+    const [text, setText] = useState('');
+    const [loading, setLoading] = useState(true);
+    const [sending, setSending] = useState(false);
+    const flatListRef = useRef<FlatList>(null);
 
-  useEffect(() => {
-    supabase.auth.getSession().then(({data}) => {
-        if(data.session) {
-            setSession(data.session);
-            loadConversations(data.session.user.id);
+    // Shared files panel
+    const [showFilesPanel, setShowFilesPanel] = useState(false);
+    const [sharedMedia, setSharedMedia] = useState<any[]>([]);
+
+    useEffect(() => {
+        supabase.auth.getSession().then(({ data }) => {
+            if (data.session) {
+                setSession(data.session);
+                loadProfile(data.session.user.id);
+            }
+        });
+    }, []);
+
+    const loadProfile = async (userId: string) => {
+        const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
+        setProfile(data);
+        if (data) {
+            loadConversations(userId, data.role);
         }
-    });
-  }, []);
+    };
 
-  useEffect(() => {
-      if(selectedConv) {
-          loadMessages(selectedConv.id);
-          const channel = supabase.channel('chat').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${selectedConv.id}`}, (payload) => {
-              setMessages(prev => [...prev, payload.new]);
-              setTimeout(() => flatListRef.current?.scrollToEnd(), 100);
-          }).subscribe();
-          return () => { supabase.removeChannel(channel); };
-      }
-  }, [selectedConv]);
+    const loadConversations = async (userId: string, role: string) => {
+        setLoading(true);
 
-  const loadConversations = async (userId: string) => {
-      const { data } = await supabase.from('conversations')
-        .select(`*, landlord:profiles!landlord_id(*), tenant:profiles!tenant_id(*)`)
-        .or(`landlord_id.eq.${userId},tenant_id.eq.${userId}`)
-        .order('updated_at', { ascending: false });
-      
-      const formatted = (data || []).map((c: any) => ({
-          ...c,
-          otherUser: c.landlord_id === userId ? c.tenant : c.landlord
-      }));
-      setConversations(formatted);
-  };
+        if (role === 'tenant') {
+            // Tenant: Only show conversation with the landlord of their rented property
+            const { data: occupancy } = await supabase
+                .from('tenant_occupancies')
+                .select('*, property:properties(title, landlord), landlord:profiles!tenant_occupancies_landlord_id_fkey(id, first_name, last_name, avatar_url)')
+                .eq('tenant_id', userId)
+                .in('status', ['active', 'pending_end'])
+                .maybeSingle();
 
-  const loadMessages = async (convId: string) => {
-      const { data } = await supabase.from('messages').select('*').eq('conversation_id', convId).order('created_at', {ascending: true});
-      setMessages(data || []);
-      setTimeout(() => flatListRef.current?.scrollToEnd(), 100);
-  };
+            if (occupancy && occupancy.landlord) {
+                // Find or create conversation
+                const { data: conv } = await supabase
+                    .from('conversations')
+                    .select(`*, landlord:profiles!landlord_id(id, first_name, last_name, avatar_url), tenant:profiles!tenant_id(id, first_name, last_name, avatar_url)`)
+                    .or(`and(landlord_id.eq.${occupancy.landlord_id},tenant_id.eq.${userId}),and(landlord_id.eq.${userId},tenant_id.eq.${occupancy.landlord_id})`)
+                    .maybeSingle();
 
-  const sendMessage = async (imgUrl?: string) => {
-      if (!text.trim() && !imgUrl) return;
-      const msg = {
-          conversation_id: selectedConv.id,
-          sender_id: session.user.id,
-          content: text,
-          type: imgUrl ? 'image' : 'text',
-          file_url: imgUrl || null
-      };
-      setText('');
-      await supabase.from('messages').insert(msg);
-      await supabase.from('conversations').update({updated_at: new Date()}).eq('id', selectedConv.id);
-  };
+                if (conv) {
+                    const formatted = {
+                        ...conv,
+                        otherUser: conv.landlord_id === userId ? conv.tenant : conv.landlord,
+                        propertyTitle: occupancy.property?.title
+                    };
+                    setConversations([formatted]);
 
-  const pickImage = async () => {
-      const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, base64: true, quality: 0.5 });
-      if (!res.canceled) {
-          const file = res.assets[0];
-          const path = `${session.user.id}/${Date.now()}.jpg`;
-          await supabase.storage.from('chat-attachments').upload(path, decode(file.base64!), { contentType: 'image/jpeg' });
-          const { data } = supabase.storage.from('chat-attachments').getPublicUrl(path);
-          sendMessage(data.publicUrl);
-      }
-  };
+                    // Load last message for preview
+                    const { data: lastMsg } = await supabase
+                        .from('messages')
+                        .select('*')
+                        .eq('conversation_id', conv.id)
+                        .order('created_at', { ascending: false })
+                        .limit(1)
+                        .maybeSingle();
+                    if (lastMsg) {
+                        formatted.lastMessage = lastMsg;
+                        setConversations([formatted]);
+                    }
+                } else {
+                    // Create conversation
+                    const { data: newConv } = await supabase
+                        .from('conversations')
+                        .insert({
+                            landlord_id: occupancy.landlord_id,
+                            tenant_id: userId,
+                        })
+                        .select(`*, landlord:profiles!landlord_id(id, first_name, last_name, avatar_url), tenant:profiles!tenant_id(id, first_name, last_name, avatar_url)`)
+                        .single();
 
-  const searchUsers = async (query: string) => {
-      if(query.length < 2) return;
-      const { data } = await supabase.from('profiles').select('*').ilike('last_name', `%${query}%`).neq('id', session.user.id).limit(10);
-      setUsers(data || []);
-  };
+                    if (newConv) {
+                        setConversations([{
+                            ...newConv,
+                            otherUser: newConv.landlord,
+                            propertyTitle: occupancy.property?.title
+                        }]);
+                    }
+                }
+            } else {
+                // Tenant has no active occupancy — no conversations
+                setConversations([]);
+            }
+        } else {
+            // Landlord: Show conversations with all tenants renting their properties
+            const { data: occupancies } = await supabase
+                .from('tenant_occupancies')
+                .select('*, tenant:profiles!tenant_occupancies_tenant_id_fkey(id, first_name, last_name, avatar_url), property:properties(title)')
+                .eq('landlord_id', userId)
+                .in('status', ['active', 'pending_end']);
 
-  const startConversation = async (user: any) => {
-      // Check existing
-      const { data: exist } = await supabase.from('conversations').select('*').or(`and(landlord_id.eq.${session.user.id},tenant_id.eq.${user.id}),and(landlord_id.eq.${user.id},tenant_id.eq.${session.user.id})`).maybeSingle();
-      if (exist) {
-          setSelectedConv({...exist, otherUser: user});
-      } else {
-          // Create
-          const isMeLandlord = false; // Simplified for demo, ideally check profile.role
-          const { data: newConv } = await supabase.from('conversations').insert({
-              landlord_id: user.role === 'landlord' ? user.id : session.user.id,
-              tenant_id: user.role === 'tenant' ? user.id : session.user.id
-          }).select().single();
-          if (newConv) setSelectedConv({...newConv, otherUser: user});
-      }
-      setShowNewModal(false);
-  };
+            if (!occupancies || occupancies.length === 0) {
+                setConversations([]);
+                setLoading(false);
+                return;
+            }
 
-  if (selectedConv) {
-      return (
-          <SafeAreaView style={{flex:1, backgroundColor:'white'}}>
-              <View style={styles.chatHeader}>
-                  <TouchableOpacity onPress={() => setSelectedConv(null)}><Ionicons name="arrow-back" size={24} /></TouchableOpacity>
-                  <Text style={styles.headerTitle}>{selectedConv.otherUser?.first_name} {selectedConv.otherUser?.last_name}</Text>
-                  <View style={{width:24}}/>
-              </View>
-              <FlatList
-                  ref={flatListRef}
-                  data={messages}
-                  keyExtractor={i => i.id}
-                  renderItem={({item}) => {
-                      const isMe = item.sender_id === session.user.id;
-                      return (
-                          <View style={[styles.msgBubble, isMe ? styles.msgMe : styles.msgOther]}>
-                              {item.type === 'image' ? (
-                                  <Image source={{uri: item.file_url}} style={{width:200, height:200, borderRadius:8}} />
-                              ) : (
-                                  <Text style={isMe ? styles.textMe : styles.textOther}>{item.content}</Text>
-                              )}
-                          </View>
-                      );
-                  }}
-              />
-              <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-                  <View style={styles.inputBar}>
-                      <TouchableOpacity onPress={pickImage}><Ionicons name="image-outline" size={24} color="#666" /></TouchableOpacity>
-                      <TextInput style={styles.input} value={text} onChangeText={setText} placeholder="Message..." />
-                      <TouchableOpacity onPress={() => sendMessage()}><Ionicons name="send" size={24} color="black" /></TouchableOpacity>
-                  </View>
-              </KeyboardAvoidingView>
-          </SafeAreaView>
-      );
-  }
+            const convList: any[] = [];
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-          <Text style={styles.headerTitle}>Messages</Text>
-          <TouchableOpacity onPress={() => setShowNewModal(true)}><Ionicons name="create-outline" size={24} /></TouchableOpacity>
-      </View>
-      <FlatList 
-          data={conversations}
-          keyExtractor={i => i.id}
-          renderItem={({item}) => (
-              <TouchableOpacity onPress={() => setSelectedConv(item)} style={styles.convItem}>
-                  <View style={styles.avatar}><Text style={{color:'white'}}>{item.otherUser?.first_name?.[0]}</Text></View>
-                  <View style={{flex:1}}>
-                      <Text style={styles.convName}>{item.otherUser?.first_name} {item.otherUser?.last_name}</Text>
-                      <Text numberOfLines={1} style={styles.convPreview}>Click to view chat</Text>
-                  </View>
-              </TouchableOpacity>
-          )}
-      />
-      <Modal visible={showNewModal} animationType="slide">
-          <SafeAreaView style={{flex:1}}>
-              <View style={styles.header}><Text style={styles.headerTitle}>New Chat</Text><TouchableOpacity onPress={() => setShowNewModal(false)}><Text>Close</Text></TouchableOpacity></View>
-              <TextInput style={styles.searchBar} placeholder="Search user..." onChangeText={searchUsers} />
-              <FlatList data={users} keyExtractor={i => i.id} renderItem={({item}) => (
-                  <TouchableOpacity onPress={() => startConversation(item)} style={styles.userItem}>
-                      <Text>{item.first_name} {item.last_name} ({item.role})</Text>
-                  </TouchableOpacity>
-              )} />
-          </SafeAreaView>
-      </Modal>
-    </SafeAreaView>
-  );
+            for (const occ of occupancies) {
+                // Find or create conversation for each tenant
+                const { data: conv } = await supabase
+                    .from('conversations')
+                    .select(`*, landlord:profiles!landlord_id(id, first_name, last_name, avatar_url), tenant:profiles!tenant_id(id, first_name, last_name, avatar_url)`)
+                    .or(`and(landlord_id.eq.${userId},tenant_id.eq.${occ.tenant_id}),and(landlord_id.eq.${occ.tenant_id},tenant_id.eq.${userId})`)
+                    .maybeSingle();
+
+                if (conv) {
+                    // Load last message
+                    const { data: lastMsg } = await supabase
+                        .from('messages')
+                        .select('*')
+                        .eq('conversation_id', conv.id)
+                        .order('created_at', { ascending: false })
+                        .limit(1)
+                        .maybeSingle();
+
+                    convList.push({
+                        ...conv,
+                        otherUser: conv.landlord_id === userId ? conv.tenant : conv.landlord,
+                        propertyTitle: occ.property?.title,
+                        lastMessage: lastMsg || null
+                    });
+                } else {
+                    // Create conversation
+                    const { data: newConv } = await supabase
+                        .from('conversations')
+                        .insert({
+                            landlord_id: userId,
+                            tenant_id: occ.tenant_id,
+                        })
+                        .select(`*, landlord:profiles!landlord_id(id, first_name, last_name, avatar_url), tenant:profiles!tenant_id(id, first_name, last_name, avatar_url)`)
+                        .single();
+
+                    if (newConv) {
+                        convList.push({
+                            ...newConv,
+                            otherUser: newConv.tenant,
+                            propertyTitle: occ.property?.title
+                        });
+                    }
+                }
+            }
+
+            // Sort by most recent message
+            convList.sort((a, b) => {
+                const aTime = a.lastMessage?.created_at || a.updated_at || '';
+                const bTime = b.lastMessage?.created_at || b.updated_at || '';
+                return new Date(bTime).getTime() - new Date(aTime).getTime();
+            });
+
+            setConversations(convList);
+        }
+        setLoading(false);
+    };
+
+    useEffect(() => {
+        if (selectedConv) {
+            loadMessages(selectedConv.id);
+            const channel = supabase
+                .channel(`chat-${selectedConv.id}`)
+                .on('postgres_changes', {
+                    event: 'INSERT', schema: 'public', table: 'messages',
+                    filter: `conversation_id=eq.${selectedConv.id}`
+                }, (payload) => {
+                    setMessages(prev => [...prev, payload.new]);
+                    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 150);
+                })
+                .subscribe();
+            return () => { supabase.removeChannel(channel); };
+        }
+    }, [selectedConv]);
+
+    const loadMessages = async (convId: string) => {
+        const { data } = await supabase
+            .from('messages')
+            .select('*')
+            .eq('conversation_id', convId)
+            .order('created_at', { ascending: true });
+        setMessages(data || []);
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 200);
+    };
+
+    const sendMessage = async (fileUrl?: string, fileType?: string, fileName?: string) => {
+        if (!text.trim() && !fileUrl) return;
+        setSending(true);
+        const msg: any = {
+            conversation_id: selectedConv.id,
+            sender_id: session.user.id,
+            content: text.trim(),
+            type: fileUrl ? (fileType || 'image') : 'text',
+            file_url: fileUrl || null,
+        };
+        if (fileName) msg.file_name = fileName;
+        setText('');
+        await supabase.from('messages').insert(msg);
+        await supabase.from('conversations').update({ updated_at: new Date().toISOString() }).eq('id', selectedConv.id);
+        setSending(false);
+    };
+
+    const pickImage = async () => {
+        const res = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            base64: true,
+            quality: 0.5
+        });
+        if (!res.canceled && res.assets[0]) {
+            const file = res.assets[0];
+            const ext = file.uri.split('.').pop()?.toLowerCase() || 'jpg';
+            const path = `${session.user.id}/${Date.now()}.${ext}`;
+            await supabase.storage.from('chat-attachments').upload(path, decode(file.base64!), { contentType: `image/${ext}` });
+            const { data } = supabase.storage.from('chat-attachments').getPublicUrl(path);
+            sendMessage(data.publicUrl, 'image');
+        }
+    };
+
+    const pickFile = async () => {
+        try {
+            const res = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
+            if (!res.canceled && res.assets && res.assets[0]) {
+                const file = res.assets[0];
+                const fileUri = file.uri;
+                const fileName = file.name || `file_${Date.now()}`;
+                const fileSize = file.size || 0;
+
+                if (fileSize > 10 * 1024 * 1024) {
+                    return Alert.alert('File Too Large', 'Maximum file size is 10MB.');
+                }
+
+                // Read file as base64
+                const base64 = await FileSystem.readAsStringAsync(fileUri, { encoding: FileSystem.EncodingType.Base64 });
+                const path = `${session.user.id}/${Date.now()}_${fileName}`;
+                const contentType = file.mimeType || 'application/octet-stream';
+
+                await supabase.storage.from('chat-attachments').upload(path, decode(base64), { contentType });
+                const { data } = supabase.storage.from('chat-attachments').getPublicUrl(path);
+                sendMessage(data.publicUrl, 'file', fileName);
+            }
+        } catch (err) {
+            console.error('File pick error:', err);
+        }
+    };
+
+    const downloadFile = async (url: string, fileName?: string) => {
+        try {
+            const name = fileName || url.split('/').pop() || 'download';
+            const fileUri = FileSystem.documentDirectory + name;
+            const { uri } = await FileSystem.downloadAsync(url, fileUri);
+
+            if (await Sharing.isAvailableAsync()) {
+                await Sharing.shareAsync(uri);
+            } else {
+                Alert.alert('Downloaded', `File saved to ${uri}`);
+            }
+        } catch (err) {
+            console.error('Download error:', err);
+            Alert.alert('Error', 'Failed to download file.');
+        }
+    };
+
+    const deleteConversation = async (convId: string) => {
+        Alert.alert(
+            'Delete Conversation',
+            'Are you sure you want to delete this conversation? All messages will be removed.',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete', style: 'destructive',
+                    onPress: async () => {
+                        await supabase.from('messages').delete().eq('conversation_id', convId);
+                        await supabase.from('conversations').delete().eq('id', convId);
+                        setConversations(prev => prev.filter(c => c.id !== convId));
+                        if (selectedConv?.id === convId) setSelectedConv(null);
+                    }
+                }
+            ]
+        );
+    };
+
+    const loadSharedMedia = async (convId: string) => {
+        const { data } = await supabase
+            .from('messages')
+            .select('*')
+            .eq('conversation_id', convId)
+            .in('type', ['image', 'file'])
+            .order('created_at', { ascending: false });
+        setSharedMedia(data || []);
+        setShowFilesPanel(true);
+    };
+
+    const getTimeAgo = (dateStr: string) => {
+        if (!dateStr) return '';
+        const now = new Date();
+        const d = new Date(dateStr);
+        const diff = Math.floor((now.getTime() - d.getTime()) / 1000);
+        if (diff < 60) return 'Just now';
+        if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+        if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+        if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
+        return d.toLocaleDateString();
+    };
+
+    const getMessagePreview = (conv: any) => {
+        if (!conv.lastMessage) return 'Start a conversation';
+        const msg = conv.lastMessage;
+        if (msg.type === 'image') return '📷 Photo';
+        if (msg.type === 'file') return `📎 ${msg.file_name || 'File'}`;
+        return msg.content || '';
+    };
+
+    const renderAvatar = (user: any, size: number = 48) => {
+        if (user?.avatar_url) {
+            return (
+                <Image source={{ uri: user.avatar_url }} style={{ width: size, height: size, borderRadius: size / 2 }} />
+            );
+        }
+        return (
+            <View style={[styles.avatarCircle, { width: size, height: size, borderRadius: size / 2 }]}>
+                <Text style={[styles.avatarLetter, { fontSize: size * 0.4 }]}>
+                    {user?.first_name?.[0]?.toUpperCase() || '?'}
+                </Text>
+            </View>
+        );
+    };
+
+    // ===================== CHAT VIEW =====================
+    if (selectedConv) {
+        return (
+            <SafeAreaView style={styles.chatContainer} edges={['top']}>
+                {/* Chat Header */}
+                <View style={styles.chatHeader}>
+                    <TouchableOpacity onPress={() => setSelectedConv(null)} style={styles.chatBackBtn}>
+                        <Ionicons name="arrow-back" size={22} color="#111" />
+                    </TouchableOpacity>
+                    <View style={styles.chatHeaderUser}>
+                        {renderAvatar(selectedConv.otherUser, 38)}
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.chatHeaderName} numberOfLines={1}>
+                                {selectedConv.otherUser?.first_name} {selectedConv.otherUser?.last_name}
+                            </Text>
+                            {selectedConv.propertyTitle && (
+                                <Text style={styles.chatHeaderProp} numberOfLines={1}>
+                                    {selectedConv.propertyTitle}
+                                </Text>
+                            )}
+                        </View>
+                    </View>
+                    <View style={{ flexDirection: 'row', gap: 4 }}>
+                        <TouchableOpacity onPress={() => loadSharedMedia(selectedConv.id)} style={styles.chatHeaderAction}>
+                            <Ionicons name="folder-outline" size={20} color="#666" />
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => deleteConversation(selectedConv.id)} style={styles.chatHeaderAction}>
+                            <Ionicons name="trash-outline" size={20} color="#ef4444" />
+                        </TouchableOpacity>
+                    </View>
+                </View>
+
+                {/* Messages */}
+                <FlatList
+                    ref={flatListRef}
+                    data={messages}
+                    keyExtractor={i => i.id}
+                    contentContainerStyle={styles.messageList}
+                    showsVerticalScrollIndicator={false}
+                    renderItem={({ item, index }) => {
+                        const isMe = item.sender_id === session.user.id;
+                        const showDate = index === 0 ||
+                            new Date(item.created_at).toDateString() !==
+                            new Date(messages[index - 1]?.created_at).toDateString();
+
+                        return (
+                            <>
+                                {showDate && (
+                                    <View style={styles.dateSeparator}>
+                                        <View style={styles.dateLine} />
+                                        <Text style={styles.dateText}>
+                                            {new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                        </Text>
+                                        <View style={styles.dateLine} />
+                                    </View>
+                                )}
+                                <View style={[styles.msgRow, isMe && { justifyContent: 'flex-end' }]}>
+                                    {!isMe && (
+                                        <View style={{ marginRight: 8 }}>
+                                            {renderAvatar(selectedConv.otherUser, 28)}
+                                        </View>
+                                    )}
+                                    <View style={[styles.msgBubble, isMe ? styles.msgMe : styles.msgOther]}>
+                                        {item.type === 'image' ? (
+                                            <TouchableOpacity onPress={() => downloadFile(item.file_url, 'photo.jpg')}>
+                                                <Image source={{ uri: item.file_url }} style={styles.msgImage} />
+                                                <View style={styles.downloadOverlay}>
+                                                    <Ionicons name="download-outline" size={16} color="white" />
+                                                </View>
+                                            </TouchableOpacity>
+                                        ) : item.type === 'file' ? (
+                                            <TouchableOpacity onPress={() => downloadFile(item.file_url, item.file_name)} style={styles.fileMsg}>
+                                                <View style={styles.fileIconBox}>
+                                                    <Ionicons name="document-outline" size={22} color="#6366f1" />
+                                                </View>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={[styles.fileName, isMe && { color: '#e0e7ff' }]} numberOfLines={1}>
+                                                        {item.file_name || 'File'}
+                                                    </Text>
+                                                    <Text style={[styles.fileTap, isMe && { color: 'rgba(255,255,255,0.5)' }]}>Tap to download</Text>
+                                                </View>
+                                                <Ionicons name="download-outline" size={18} color={isMe ? 'rgba(255,255,255,0.7)' : '#6366f1'} />
+                                            </TouchableOpacity>
+                                        ) : (
+                                            <Text style={[styles.msgText, isMe ? styles.textMe : styles.textOther]}>{item.content}</Text>
+                                        )}
+                                        <Text style={[styles.msgTime, isMe ? styles.timeMe : styles.timeOther]}>
+                                            {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                        </Text>
+                                    </View>
+                                </View>
+                            </>
+                        );
+                    }}
+                />
+
+                {/* Input Bar */}
+                <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+                    <View style={styles.inputBar}>
+                        <TouchableOpacity onPress={pickFile} style={styles.inputAction}>
+                            <Ionicons name="attach-outline" size={22} color="#9ca3af" />
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={pickImage} style={styles.inputAction}>
+                            <Ionicons name="image-outline" size={22} color="#9ca3af" />
+                        </TouchableOpacity>
+                        <TextInput
+                            style={styles.textInput}
+                            value={text}
+                            onChangeText={setText}
+                            placeholder="Type a message..."
+                            placeholderTextColor="#c4c4c4"
+                            multiline
+                        />
+                        <TouchableOpacity
+                            onPress={() => sendMessage()}
+                            disabled={sending || !text.trim()}
+                            style={[styles.sendBtn, (!text.trim() || sending) && { opacity: 0.4 }]}
+                        >
+                            {sending ? (
+                                <ActivityIndicator color="white" size="small" />
+                            ) : (
+                                <Ionicons name="send" size={18} color="white" />
+                            )}
+                        </TouchableOpacity>
+                    </View>
+                </KeyboardAvoidingView>
+
+                {/* Shared Files Panel */}
+                <Modal visible={showFilesPanel} animationType="slide" presentationStyle="pageSheet">
+                    <SafeAreaView style={styles.filesPanelContainer}>
+                        <View style={styles.filesPanelHeader}>
+                            <Text style={styles.filesPanelTitle}>Shared Files & Photos</Text>
+                            <TouchableOpacity onPress={() => setShowFilesPanel(false)} style={styles.filesPanelClose}>
+                                <Ionicons name="close" size={22} color="#666" />
+                            </TouchableOpacity>
+                        </View>
+
+                        {sharedMedia.length === 0 ? (
+                            <View style={styles.emptyFiles}>
+                                <View style={styles.emptyFilesIcon}>
+                                    <Ionicons name="folder-open-outline" size={40} color="#d1d5db" />
+                                </View>
+                                <Text style={styles.emptyFilesTitle}>No shared files yet</Text>
+                                <Text style={styles.emptyFilesSub}>Photos and files shared in this conversation will appear here.</Text>
+                            </View>
+                        ) : (
+                            <FlatList
+                                data={sharedMedia}
+                                keyExtractor={i => i.id}
+                                contentContainerStyle={{ padding: 16 }}
+                                renderItem={({ item }) => (
+                                    <TouchableOpacity
+                                        onPress={() => downloadFile(item.file_url, item.file_name)}
+                                        style={styles.sharedFileItem}
+                                    >
+                                        {item.type === 'image' ? (
+                                            <Image source={{ uri: item.file_url }} style={styles.sharedFileThumb} />
+                                        ) : (
+                                            <View style={[styles.sharedFileThumb, styles.sharedFileIcon]}>
+                                                <Ionicons name="document-outline" size={24} color="#6366f1" />
+                                            </View>
+                                        )}
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={styles.sharedFileName} numberOfLines={1}>
+                                                {item.type === 'image' ? 'Photo' : (item.file_name || 'File')}
+                                            </Text>
+                                            <Text style={styles.sharedFileDate}>
+                                                {new Date(item.created_at).toLocaleDateString()}
+                                            </Text>
+                                        </View>
+                                        <View style={styles.sharedFileDownload}>
+                                            <Ionicons name="download-outline" size={18} color="#6366f1" />
+                                        </View>
+                                    </TouchableOpacity>
+                                )}
+                            />
+                        )}
+                    </SafeAreaView>
+                </Modal>
+            </SafeAreaView>
+        );
+    }
+
+    // ===================== CONVERSATION LIST VIEW =====================
+    return (
+        <SafeAreaView style={styles.container} edges={['top']}>
+            {/* Page Header */}
+            <View style={styles.header}>
+                <View>
+                    <Text style={styles.headerTitle}>Messages</Text>
+                    <Text style={styles.headerSub}>
+                        {profile?.role === 'tenant'
+                            ? 'Chat with your landlord'
+                            : `${conversations.length} conversation${conversations.length !== 1 ? 's' : ''}`}
+                    </Text>
+                </View>
+                <View style={styles.headerBadge}>
+                    <Ionicons name="chatbubbles" size={20} color="white" />
+                </View>
+            </View>
+
+            {loading ? (
+                <View style={styles.loadingBox}>
+                    <ActivityIndicator size="large" color="#111" />
+                    <Text style={styles.loadingText}>Loading conversations...</Text>
+                </View>
+            ) : conversations.length === 0 ? (
+                <View style={styles.emptyState}>
+                    <View style={styles.emptyIcon}>
+                        <Ionicons name="chatbubble-ellipses-outline" size={48} color="#d1d5db" />
+                    </View>
+                    <Text style={styles.emptyTitle}>
+                        {profile?.role === 'tenant' ? 'No Landlord Found' : 'No Tenants Yet'}
+                    </Text>
+                    <Text style={styles.emptySubtitle}>
+                        {profile?.role === 'tenant'
+                            ? "You don't have an active rental yet. Once you're assigned to a property, you can message your landlord here."
+                            : "Tenants renting your properties will appear here for messaging."}
+                    </Text>
+                </View>
+            ) : (
+                <FlatList
+                    data={conversations}
+                    keyExtractor={i => i.id}
+                    contentContainerStyle={{ paddingBottom: 20 }}
+                    renderItem={({ item }) => (
+                        <TouchableOpacity onPress={() => setSelectedConv(item)} style={styles.convItem} activeOpacity={0.7}>
+                            <View style={styles.convAvatarWrap}>
+                                {renderAvatar(item.otherUser, 52)}
+                                <View style={styles.onlineDot} />
+                            </View>
+                            <View style={styles.convContent}>
+                                <View style={styles.convTopRow}>
+                                    <Text style={styles.convName} numberOfLines={1}>
+                                        {item.otherUser?.first_name} {item.otherUser?.last_name}
+                                    </Text>
+                                    <Text style={styles.convTime}>
+                                        {getTimeAgo(item.lastMessage?.created_at || item.updated_at)}
+                                    </Text>
+                                </View>
+                                {item.propertyTitle && (
+                                    <View style={styles.convPropertyTag}>
+                                        <Ionicons name="home-outline" size={10} color="#6366f1" />
+                                        <Text style={styles.convPropertyText}>{item.propertyTitle}</Text>
+                                    </View>
+                                )}
+                                <Text style={styles.convPreview} numberOfLines={1}>
+                                    {getMessagePreview(item)}
+                                </Text>
+                            </View>
+                            <TouchableOpacity onPress={() => deleteConversation(item.id)} style={styles.convDeleteBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                                <Ionicons name="trash-outline" size={16} color="#ef4444" />
+                            </TouchableOpacity>
+                        </TouchableOpacity>
+                    )}
+                />
+            )}
+        </SafeAreaView>
+    );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  header: { padding: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  headerTitle: { fontSize: 24, fontWeight: 'bold' },
-  convItem: { flexDirection: 'row', padding: 15, borderBottomWidth: 1, borderColor: '#eee', gap: 15 },
-  avatar: { width: 50, height: 50, borderRadius: 25, backgroundColor: 'black', alignItems: 'center', justifyContent: 'center' },
-  convName: { fontWeight: 'bold', fontSize: 16 },
-  convPreview: { color: '#666' },
-  chatHeader: { flexDirection: 'row', padding: 15, alignItems: 'center', borderBottomWidth: 1, borderColor: '#eee', justifyContent:'space-between' },
-  msgBubble: { padding: 10, borderRadius: 12, marginVertical: 5, marginHorizontal: 15, maxWidth: '80%' },
-  msgMe: { backgroundColor: 'black', alignSelf: 'flex-end' },
-  msgOther: { backgroundColor: '#f0f0f0', alignSelf: 'flex-start' },
-  textMe: { color: 'white' },
-  textOther: { color: 'black' },
-  inputBar: { flexDirection: 'row', padding: 10, borderTopWidth: 1, borderColor: '#eee', alignItems: 'center', gap: 10 },
-  input: { flex: 1, backgroundColor: '#f0f0f0', padding: 10, borderRadius: 20 },
-  searchBar: { margin: 15, padding: 10, backgroundColor: '#f0f0f0', borderRadius: 10 },
-  userItem: { padding: 15, borderBottomWidth: 1, borderColor: '#eee' }
+    // ===================== LIST VIEW =====================
+    container: { flex: 1, backgroundColor: '#f9fafb' },
+
+    header: {
+        flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+        paddingHorizontal: 20, paddingVertical: 16, backgroundColor: 'white',
+        borderBottomWidth: 1, borderBottomColor: '#f3f4f6'
+    },
+    headerTitle: { fontSize: 24, fontWeight: '900', color: '#111' },
+    headerSub: { fontSize: 12, color: '#9ca3af', marginTop: 2 },
+    headerBadge: {
+        width: 42, height: 42, borderRadius: 14, backgroundColor: '#111',
+        alignItems: 'center', justifyContent: 'center'
+    },
+
+    loadingBox: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
+    loadingText: { fontSize: 13, color: '#9ca3af' },
+
+    // Empty State
+    emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
+    emptyIcon: {
+        width: 90, height: 90, borderRadius: 45, backgroundColor: '#f3f4f6',
+        alignItems: 'center', justifyContent: 'center', marginBottom: 20
+    },
+    emptyTitle: { fontSize: 20, fontWeight: '800', color: '#111', marginBottom: 8 },
+    emptySubtitle: { fontSize: 14, color: '#9ca3af', textAlign: 'center', lineHeight: 22 },
+
+    // Conversation Item
+    convItem: {
+        flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14,
+        backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: '#f9fafb', gap: 14
+    },
+    convAvatarWrap: { position: 'relative' },
+    onlineDot: {
+        position: 'absolute', bottom: 2, right: 2, width: 12, height: 12, borderRadius: 6,
+        backgroundColor: '#22c55e', borderWidth: 2, borderColor: 'white'
+    },
+    convContent: { flex: 1 },
+    convTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    convName: { fontSize: 16, fontWeight: '700', color: '#111', flex: 1, marginRight: 8 },
+    convTime: { fontSize: 11, color: '#c4c4c4', fontWeight: '500' },
+    convPropertyTag: {
+        flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3,
+        backgroundColor: '#eef2ff', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
+        alignSelf: 'flex-start'
+    },
+    convPropertyText: { fontSize: 10, color: '#6366f1', fontWeight: '600' },
+    convPreview: { fontSize: 13, color: '#9ca3af', marginTop: 4 },
+    convDeleteBtn: {
+        width: 32, height: 32, borderRadius: 8, backgroundColor: '#fef2f2',
+        alignItems: 'center', justifyContent: 'center'
+    },
+
+    // Avatar
+    avatarCircle: {
+        backgroundColor: '#111', alignItems: 'center', justifyContent: 'center',
+    },
+    avatarLetter: { color: 'white', fontWeight: '800' },
+
+    // ===================== CHAT VIEW =====================
+    chatContainer: { flex: 1, backgroundColor: '#f9fafb' },
+
+    chatHeader: {
+        flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12,
+        backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: '#f3f4f6', gap: 10
+    },
+    chatBackBtn: {
+        width: 38, height: 38, borderRadius: 12, backgroundColor: '#f3f4f6',
+        alignItems: 'center', justifyContent: 'center'
+    },
+    chatHeaderUser: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
+    chatHeaderName: { fontSize: 16, fontWeight: '700', color: '#111' },
+    chatHeaderProp: { fontSize: 11, color: '#9ca3af' },
+    chatHeaderAction: {
+        width: 36, height: 36, borderRadius: 10, backgroundColor: '#f3f4f6',
+        alignItems: 'center', justifyContent: 'center'
+    },
+
+    // Messages
+    messageList: { paddingHorizontal: 16, paddingVertical: 12, paddingBottom: 8 },
+    dateSeparator: { flexDirection: 'row', alignItems: 'center', marginVertical: 16, gap: 12 },
+    dateLine: { flex: 1, height: 1, backgroundColor: '#e5e7eb' },
+    dateText: { fontSize: 11, color: '#9ca3af', fontWeight: '600' },
+
+    msgRow: { flexDirection: 'row', alignItems: 'flex-end', marginBottom: 6 },
+    msgBubble: { maxWidth: '78%', borderRadius: 18, overflow: 'hidden' },
+    msgMe: {
+        backgroundColor: '#111', borderBottomRightRadius: 6,
+        paddingHorizontal: 14, paddingVertical: 10
+    },
+    msgOther: {
+        backgroundColor: 'white', borderBottomLeftRadius: 6,
+        paddingHorizontal: 14, paddingVertical: 10,
+        borderWidth: 1, borderColor: '#f3f4f6',
+        shadowColor: '#000', shadowOpacity: 0.03, shadowRadius: 4, elevation: 1
+    },
+    msgText: { fontSize: 15, lineHeight: 21 },
+    textMe: { color: 'white' },
+    textOther: { color: '#111' },
+    msgTime: { fontSize: 10, marginTop: 4 },
+    timeMe: { color: 'rgba(255,255,255,0.45)', textAlign: 'right' },
+    timeOther: { color: '#c4c4c4' },
+
+    msgImage: { width: 200, height: 200, borderRadius: 12 },
+    downloadOverlay: {
+        position: 'absolute', bottom: 8, right: 8, width: 28, height: 28,
+        borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.5)',
+        alignItems: 'center', justifyContent: 'center'
+    },
+
+    // File Message
+    fileMsg: {
+        flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 200
+    },
+    fileIconBox: {
+        width: 40, height: 40, borderRadius: 10, backgroundColor: '#eef2ff',
+        alignItems: 'center', justifyContent: 'center'
+    },
+    fileName: { fontSize: 13, fontWeight: '600', color: '#111' },
+    fileTap: { fontSize: 10, color: '#9ca3af', marginTop: 1 },
+
+    // Input Bar
+    inputBar: {
+        flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 12,
+        paddingVertical: 10, backgroundColor: 'white', borderTopWidth: 1,
+        borderTopColor: '#f3f4f6', gap: 6
+    },
+    inputAction: {
+        width: 38, height: 38, borderRadius: 12, backgroundColor: '#f3f4f6',
+        alignItems: 'center', justifyContent: 'center'
+    },
+    textInput: {
+        flex: 1, maxHeight: 100, backgroundColor: '#f3f4f6', borderRadius: 20,
+        paddingHorizontal: 16, paddingVertical: 10, fontSize: 15, color: '#111'
+    },
+    sendBtn: {
+        width: 40, height: 40, borderRadius: 20, backgroundColor: '#111',
+        alignItems: 'center', justifyContent: 'center'
+    },
+
+    // ===================== SHARED FILES PANEL =====================
+    filesPanelContainer: { flex: 1, backgroundColor: 'white' },
+    filesPanelHeader: {
+        flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+        paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#f3f4f6'
+    },
+    filesPanelTitle: { fontSize: 18, fontWeight: '800', color: '#111' },
+    filesPanelClose: {
+        width: 36, height: 36, borderRadius: 18, backgroundColor: '#f3f4f6',
+        alignItems: 'center', justifyContent: 'center'
+    },
+
+    emptyFiles: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
+    emptyFilesIcon: {
+        width: 80, height: 80, borderRadius: 40, backgroundColor: '#f3f4f6',
+        alignItems: 'center', justifyContent: 'center', marginBottom: 16
+    },
+    emptyFilesTitle: { fontSize: 17, fontWeight: '700', color: '#111', marginBottom: 6 },
+    emptyFilesSub: { fontSize: 13, color: '#9ca3af', textAlign: 'center', lineHeight: 20 },
+
+    sharedFileItem: {
+        flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12,
+        borderBottomWidth: 1, borderBottomColor: '#f9fafb'
+    },
+    sharedFileThumb: { width: 48, height: 48, borderRadius: 10 },
+    sharedFileIcon: { backgroundColor: '#eef2ff', alignItems: 'center', justifyContent: 'center' },
+    sharedFileName: { fontSize: 14, fontWeight: '600', color: '#111' },
+    sharedFileDate: { fontSize: 11, color: '#9ca3af', marginTop: 2 },
+    sharedFileDownload: {
+        width: 36, height: 36, borderRadius: 10, backgroundColor: '#eef2ff',
+        alignItems: 'center', justifyContent: 'center'
+    },
 });

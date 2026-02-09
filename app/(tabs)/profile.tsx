@@ -336,7 +336,7 @@ export default function Profile() {
         ))}
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 50 }}>
+      <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 20 }}>
 
         {/* --- PROFILE TAB --- */}
         {activeTab === 'profile' && (
@@ -533,7 +533,15 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f9fafb' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-  header: { padding: 20, backgroundColor: 'white', borderBottomWidth: 1, borderColor: '#eee' },
+  header: {
+    justifyContent: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    backgroundColor: "#fff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+    height: 80, // Approximate height to match Home header visual
+  },
   headerTitle: { fontSize: 24, fontWeight: '900' },
   headerSubtitle: { color: '#666', fontSize: 14 },
 

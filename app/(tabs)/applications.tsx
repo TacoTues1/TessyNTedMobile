@@ -1,13 +1,22 @@
-import React, { useEffect, useState } from 'react';
-import { 
-  View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, 
-  Modal, TextInput, ActivityIndicator, RefreshControl, FlatList 
-} from 'react-native';
-import { supabase } from '../../lib/supabase';
-import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Modal,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { createNotification } from '../../lib/notifications';
+import { supabase } from '../../lib/supabase';
 
 export default function ApplicationsPage() {
   const router = useRouter();
@@ -17,7 +26,7 @@ export default function ApplicationsPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<'all' | 'pending' | 'accepted' | 'rejected'>('all');
-  const [expandedApps, setExpandedApps] = useState<{[key: string]: boolean}>({});
+  const [expandedApps, setExpandedApps] = useState<{ [key: string]: boolean }>({});
 
   // Landlord Specific
   const [pendingBookings, setPendingBookings] = useState<any[]>([]);
@@ -82,7 +91,7 @@ export default function ApplicationsPage() {
 
         if (myProperties && myProperties.length > 0) {
           const propIds = myProperties.map(p => p.id);
-          
+
           // 2. Fetch Applications for those properties
           // NOTE: Removed 'tenant_profile' alias to avoid join errors. Access via 'profiles' now.
           let query = supabase
@@ -96,9 +105,9 @@ export default function ApplicationsPage() {
             .order('submitted_at', { ascending: false });
 
           if (filter !== 'all') query = query.eq('status', filter);
-          
+
           const { data, error } = await query;
-          
+
           if (error) {
             console.log('Application Fetch Error:', error); // Check terminal for this!
             Alert.alert('Error', 'Failed to load applications');
@@ -118,7 +127,7 @@ export default function ApplicationsPage() {
 
         if (filter !== 'all') query = query.eq('status', filter);
         const { data, error } = await query;
-        
+
         if (error) console.log('Tenant App Error:', error);
 
         if (data) {
@@ -181,7 +190,7 @@ export default function ApplicationsPage() {
     setSelectedApplication(app);
     setShowBookingModal(true);
     setAvailableTimeSlots([]);
-    
+
     // Fetch Slots
     const landlordId = app.property?.landlord;
     if (landlordId) {
@@ -256,8 +265,8 @@ export default function ApplicationsPage() {
       }
 
       // 2. SEND NOTIFICATION (Fix)
-      const msg = status === 'approved' 
-        ? `Your viewing for ${booking.property?.title} is approved!` 
+      const msg = status === 'approved'
+        ? `Your viewing for ${booking.property?.title} is approved!`
         : `Your viewing for ${booking.property?.title} was rejected.`;
 
       await createNotification(
@@ -275,16 +284,16 @@ export default function ApplicationsPage() {
   // --- RENDERING ---
   const renderCard = ({ item }: { item: any }) => {
     const isExpanded = expandedApps[item.id];
-    
+
     // Handle the Profile Data safely (it might be in 'profiles' or 'tenant_profile')
     // We try 'profiles' first since we updated the query
-    const tenantData = item.profiles || item.tenant_profile; 
+    const tenantData = item.profiles || item.tenant_profile;
 
     return (
       <View style={styles.card}>
         {/* Header */}
         <View style={styles.cardHeader}>
-          <View style={{flex: 1}}>
+          <View style={{ flex: 1 }}>
             <Text style={styles.propTitle}>{item.property?.title || 'Unknown Property'}</Text>
             <Text style={styles.propCity}>{item.property?.city}</Text>
             <Text style={styles.propPrice}>₱{Number(item.property?.price).toLocaleString()}</Text>
@@ -302,37 +311,37 @@ export default function ApplicationsPage() {
 
             {/* APPLICANT INFO (Landlord Only) */}
             {profile?.role === 'landlord' && (
-               <View style={styles.infoBox}>
-                 <Text style={styles.infoTitle}>Applicant Info:</Text>
-                 {tenantData ? (
-                   <>
-                     <Text style={styles.blackText}>Name: {tenantData.first_name} {tenantData.last_name}</Text>
-                     <Text style={styles.blackText}>Phone: {tenantData.phone || 'N/A'}</Text>
-                     {/* Removed Email Line */}
-                   </>
-                 ) : (
-                   <Text style={{color: 'red'}}>Tenant profile not found</Text>
-                 )}
-               </View>
+              <View style={styles.infoBox}>
+                <Text style={styles.infoTitle}>Applicant Info:</Text>
+                {tenantData ? (
+                  <>
+                    <Text style={styles.blackText}>Name: {tenantData.first_name} {tenantData.last_name}</Text>
+                    <Text style={styles.blackText}>Phone: {tenantData.phone || 'N/A'}</Text>
+                    {/* Removed Email Line */}
+                  </>
+                ) : (
+                  <Text style={{ color: 'red' }}>Tenant profile not found</Text>
+                )}
+              </View>
             )}
 
             {/* MESSAGE SECTION - Fixed Color */}
             {item.message && (
-               <View style={[styles.infoBox, { backgroundColor: '#eef2ff' }]}>
-                 <Text style={styles.infoTitle}>Message from Tenant:</Text>
-                 <Text style={styles.messageText}>{item.message}</Text>
-               </View>
+              <View style={[styles.infoBox, { backgroundColor: '#eef2ff' }]}>
+                <Text style={styles.infoTitle}>Message from Tenant:</Text>
+                <Text style={styles.messageText}>{item.message}</Text>
+              </View>
             )}
 
             {/* Tenant Booking Info */}
             {profile?.role === 'tenant' && item.hasBooking && (
-               <View style={[styles.infoBox, { backgroundColor: '#f0fdf4' }]}>
-                 <Text style={styles.infoTitle}>Viewing Details:</Text>
-                 <Text style={styles.blackText}>{new Date(item.latestBooking.booking_date).toLocaleString()}</Text>
-                 <Text style={{fontWeight:'bold', color: item.latestBooking.status === 'approved' ? 'green' : 'orange'}}>
-                    Status: {item.latestBooking.status}
-                 </Text>
-               </View>
+              <View style={[styles.infoBox, { backgroundColor: '#f0fdf4' }]}>
+                <Text style={styles.infoTitle}>Viewing Details:</Text>
+                <Text style={styles.blackText}>{new Date(item.latestBooking.booking_date).toLocaleString()}</Text>
+                <Text style={{ fontWeight: 'bold', color: item.latestBooking.status === 'approved' ? 'green' : 'orange' }}>
+                  Status: {item.latestBooking.status}
+                </Text>
+              </View>
             )}
           </View>
         )}
@@ -345,10 +354,10 @@ export default function ApplicationsPage() {
 
           {profile?.role === 'landlord' && item.status === 'pending' && (
             <>
-              <TouchableOpacity onPress={() => updateStatus(item.id, 'accepted')} style={[styles.fillBtn, {backgroundColor: 'green'}]}>
+              <TouchableOpacity onPress={() => updateStatus(item.id, 'accepted')} style={[styles.fillBtn, { backgroundColor: 'green' }]}>
                 <Text style={styles.whiteText}>Accept</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => updateStatus(item.id, 'rejected')} style={[styles.fillBtn, {backgroundColor: 'red'}]}>
+              <TouchableOpacity onPress={() => updateStatus(item.id, 'rejected')} style={[styles.fillBtn, { backgroundColor: 'red' }]}>
                 <Text style={styles.whiteText}>Reject</Text>
               </TouchableOpacity>
             </>
@@ -362,7 +371,7 @@ export default function ApplicationsPage() {
           )}
 
           {item.status !== 'accepted' && (
-            <TouchableOpacity onPress={() => { setAppToDelete(item.id); setShowDeleteModal(true); }} style={{marginLeft: 'auto', padding: 5}}>
+            <TouchableOpacity onPress={() => { setAppToDelete(item.id); setShowDeleteModal(true); }} style={{ marginLeft: 'auto', padding: 5 }}>
               <Ionicons name="trash-outline" size={20} color="red" />
             </TouchableOpacity>
           )}
@@ -372,7 +381,7 @@ export default function ApplicationsPage() {
   };
 
   const getStatusStyle = (status: string) => {
-    switch(status) {
+    switch (status) {
       case 'accepted': return { backgroundColor: '#dcfce7', borderColor: '#166534' };
       case 'rejected': return { backgroundColor: '#fee2e2', borderColor: '#991b1b' };
       default: return { backgroundColor: '#fef9c3', borderColor: '#854d0e' };
@@ -380,7 +389,7 @@ export default function ApplicationsPage() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <Text style={styles.title}>{profile?.role === 'landlord' ? 'Tenant Applications' : 'My Applications'}</Text>
       </View>
@@ -388,9 +397,9 @@ export default function ApplicationsPage() {
       {/* Filters */}
       <View style={styles.filterRow}>
         {['all', 'pending', 'accepted', 'rejected'].map((f) => (
-          <TouchableOpacity 
-            key={f} 
-            onPress={() => setFilter(f as any)} 
+          <TouchableOpacity
+            key={f}
+            onPress={() => setFilter(f as any)}
             style={[styles.filterBtn, filter === f && styles.activeFilter]}
           >
             <Text style={[styles.filterText, filter === f && styles.activeFilterText]}>
@@ -404,15 +413,15 @@ export default function ApplicationsPage() {
       {profile?.role === 'landlord' && pendingBookings.length > 0 && (
         <TouchableOpacity onPress={() => setShowBookingsListModal(true)} style={styles.banner}>
           <Ionicons name="alert-circle" size={24} color="#854d0e" />
-          <View style={{flex:1, marginLeft: 10}}>
-             <Text style={{fontWeight:'bold', color: '#854d0e'}}>{pendingBookings.length} Pending Viewings</Text>
-             <Text style={{fontSize:12, color: '#854d0e'}}>Tap to review requests</Text>
+          <View style={{ flex: 1, marginLeft: 10 }}>
+            <Text style={{ fontWeight: 'bold', color: '#854d0e' }}>{pendingBookings.length} Pending Viewings</Text>
+            <Text style={{ fontSize: 12, color: '#854d0e' }}>Tap to review requests</Text>
           </View>
           <Ionicons name="chevron-forward" size={20} color="#854d0e" />
         </TouchableOpacity>
       )}
 
-      {loading ? <ActivityIndicator style={{marginTop: 50}} /> : (
+      {loading ? <ActivityIndicator style={{ marginTop: 50 }} /> : (
         <FlatList
           data={applications}
           renderItem={renderCard}
@@ -420,9 +429,9 @@ export default function ApplicationsPage() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); loadData(); }} />}
           contentContainerStyle={{ padding: 15 }}
           ListEmptyComponent={
-            <View style={{alignItems: 'center', marginTop: 50}}>
+            <View style={{ alignItems: 'center', marginTop: 50 }}>
               <Text style={styles.emptyText}>No applications found.</Text>
-              <TouchableOpacity onPress={loadData} style={{marginTop: 10}}><Text style={{color:'blue'}}>Tap to Retry</Text></TouchableOpacity>
+              <TouchableOpacity onPress={loadData} style={{ marginTop: 10 }}><Text style={{ color: 'blue' }}>Tap to Retry</Text></TouchableOpacity>
             </View>
           }
         />
@@ -434,22 +443,22 @@ export default function ApplicationsPage() {
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Schedule Viewing</Text>
             <Text style={styles.subTitle}>{selectedApplication?.property?.title}</Text>
-            
+
             <Text style={styles.label}>Select Time Slot:</Text>
             {availableTimeSlots.length === 0 ? (
-               <Text style={styles.noSlots}>No slots available. Contact Landlord.</Text>
+              <Text style={styles.noSlots}>No slots available. Contact Landlord.</Text>
             ) : (
-              <ScrollView style={{maxHeight: 200}}>
+              <ScrollView style={{ maxHeight: 200 }}>
                 {availableTimeSlots.map(slot => (
-                   <TouchableOpacity 
-                     key={slot.id} 
-                     onPress={() => setSelectedTimeSlot(slot.id)}
-                     style={[styles.slotItem, selectedTimeSlot === slot.id && styles.activeSlot]}
-                   >
-                     <Text style={[selectedTimeSlot === slot.id ? {color:'white'} : {color:'black'}]}>
-                       {new Date(slot.start_time).toLocaleDateString()} • {new Date(slot.start_time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                     </Text>
-                   </TouchableOpacity>
+                  <TouchableOpacity
+                    key={slot.id}
+                    onPress={() => setSelectedTimeSlot(slot.id)}
+                    style={[styles.slotItem, selectedTimeSlot === slot.id && styles.activeSlot]}
+                  >
+                    <Text style={[selectedTimeSlot === slot.id ? { color: 'white' } : { color: 'black' }]}>
+                      {new Date(slot.start_time).toLocaleDateString()} • {new Date(slot.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </Text>
+                  </TouchableOpacity>
                 ))}
               </ScrollView>
             )}
@@ -458,10 +467,10 @@ export default function ApplicationsPage() {
             <TextInput style={styles.input} placeholder="Any questions?" value={bookingNotes} onChangeText={setBookingNotes} multiline />
 
             <View style={styles.modalBtnRow}>
-               <TouchableOpacity onPress={() => setShowBookingModal(false)} style={styles.cancelBtn}><Text>Cancel</Text></TouchableOpacity>
-               <TouchableOpacity onPress={submitBooking} disabled={submittingBooking || availableTimeSlots.length === 0} style={[styles.confirmBtn, (submittingBooking || availableTimeSlots.length === 0) && {opacity: 0.5}]}>
-                 <Text style={styles.whiteText}>{submittingBooking ? 'Sending...' : 'Request'}</Text>
-               </TouchableOpacity>
+              <TouchableOpacity onPress={() => setShowBookingModal(false)} style={styles.cancelBtn}><Text>Cancel</Text></TouchableOpacity>
+              <TouchableOpacity onPress={submitBooking} disabled={submittingBooking || availableTimeSlots.length === 0} style={[styles.confirmBtn, (submittingBooking || availableTimeSlots.length === 0) && { opacity: 0.5 }]}>
+                <Text style={styles.whiteText}>{submittingBooking ? 'Sending...' : 'Request'}</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -471,36 +480,36 @@ export default function ApplicationsPage() {
         <View style={styles.modalBg}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Delete Application?</Text>
-            <Text style={{marginBottom: 20}}>This cannot be undone.</Text>
+            <Text style={{ marginBottom: 20 }}>This cannot be undone.</Text>
             <View style={styles.modalBtnRow}>
-               <TouchableOpacity onPress={() => setShowDeleteModal(false)} style={styles.cancelBtn}><Text>Cancel</Text></TouchableOpacity>
-               <TouchableOpacity onPress={deleteApplication} style={[styles.confirmBtn, {backgroundColor: 'red'}]}><Text style={styles.whiteText}>Delete</Text></TouchableOpacity>
+              <TouchableOpacity onPress={() => setShowDeleteModal(false)} style={styles.cancelBtn}><Text>Cancel</Text></TouchableOpacity>
+              <TouchableOpacity onPress={deleteApplication} style={[styles.confirmBtn, { backgroundColor: 'red' }]}><Text style={styles.whiteText}>Delete</Text></TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
       <Modal visible={showBookingsListModal} animationType="slide">
-        <SafeAreaView style={{flex: 1}}>
+        <SafeAreaView style={{ flex: 1 }}>
           <View style={styles.header}>
             <TouchableOpacity onPress={() => setShowBookingsListModal(false)}><Ionicons name="close" size={24} /></TouchableOpacity>
             <Text style={styles.title}>Pending Requests</Text>
-            <View style={{width: 24}} />
+            <View style={{ width: 24 }} />
           </View>
-          <FlatList 
+          <FlatList
             data={pendingBookings}
-            contentContainerStyle={{padding: 20}}
+            contentContainerStyle={{ padding: 20 }}
             keyExtractor={item => item.id}
-            renderItem={({item}) => (
+            renderItem={({ item }) => (
               <View style={styles.card}>
                 <Text style={styles.propTitle}>{item.property?.title}</Text>
                 <Text>Tenant: {item.profiles?.first_name} {item.profiles?.last_name}</Text>
-                <Text style={{marginVertical: 5, fontWeight: 'bold'}}>Date: {new Date(item.booking_date).toLocaleString()}</Text>
-                {item.notes && <Text style={{fontStyle:'italic', marginBottom: 10}}>"{item.notes}"</Text>}
+                <Text style={{ marginVertical: 5, fontWeight: 'bold' }}>Date: {new Date(item.booking_date).toLocaleString()}</Text>
+                {item.notes && <Text style={{ fontStyle: 'italic', marginBottom: 10 }}>"{item.notes}"</Text>}
                 <View style={styles.actionRow}>
-                   <TouchableOpacity onPress={() => handleBookingResponse(item.id, 'approved', item.time_slot_id)} style={[styles.fillBtn, {backgroundColor: 'green', flex: 1}]}><Text style={styles.whiteText}>Approve</Text></TouchableOpacity>
-                   <View style={{width: 10}} />
-                   <TouchableOpacity onPress={() => handleBookingResponse(item.id, 'rejected', item.time_slot_id)} style={[styles.fillBtn, {backgroundColor: 'red', flex: 1}]}><Text style={styles.whiteText}>Reject</Text></TouchableOpacity>
+                  <TouchableOpacity onPress={() => handleBookingResponse(item.id, 'approved', item.time_slot_id)} style={[styles.fillBtn, { backgroundColor: 'green', flex: 1 }]}><Text style={styles.whiteText}>Approve</Text></TouchableOpacity>
+                  <View style={{ width: 10 }} />
+                  <TouchableOpacity onPress={() => handleBookingResponse(item.id, 'rejected', item.time_slot_id)} style={[styles.fillBtn, { backgroundColor: 'red', flex: 1 }]}><Text style={styles.whiteText}>Reject</Text></TouchableOpacity>
                 </View>
               </View>
             )}
@@ -523,7 +532,7 @@ const styles = StyleSheet.create({
   activeFilterText: { color: 'white' },
   banner: { flexDirection: 'row', backgroundColor: '#fef9c3', margin: 15, padding: 15, borderRadius: 10, alignItems: 'center', borderWidth: 1, borderColor: '#ca8a04' },
   emptyText: { textAlign: 'center', color: '#999', fontSize: 16 },
-  card: { backgroundColor: 'white', padding: 15, borderRadius: 12, marginBottom: 15, elevation: 2, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5, shadowOffset: {width:0, height:2} },
+  card: { backgroundColor: 'white', padding: 15, borderRadius: 12, marginBottom: 15, elevation: 2, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5, shadowOffset: { width: 0, height: 2 } },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   propTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 2 },
   propCity: { fontSize: 12, color: '#666' },

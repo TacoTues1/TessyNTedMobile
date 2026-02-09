@@ -136,14 +136,16 @@ export default function TabLayout() {
           tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "person" : "person-outline"} size={26} color={color} />
         }}
       />
-      <Tabs.Screen name="messages" options={{ href: null }} />
-      <Tabs.Screen name="maintenance" options={{ href: null }} />
-      <Tabs.Screen name="payments" options={{ href: null }} />
-      <Tabs.Screen name="schedule" options={{ href: null }} />
-      <Tabs.Screen name="bookings" options={{ href: null }} />
-      <Tabs.Screen name="applications" options={{ href: null }} />
-      <Tabs.Screen name="terms" options={{ href: null, tabBarStyle: { display: 'flex' } }} />
-      <Tabs.Screen name="allproperties" options={{ href: null, tabBarStyle: { display: 'flex' } }} />
+      <Tabs.Screen name="messages" options={{ href: null, tabBarStyle: { display: 'flex', height: 60, borderTopWidth: 1, borderTopColor: '#f0f0f0', elevation: 0 } }} />
+      <Tabs.Screen name="maintenance" options={{ href: null, tabBarStyle: { display: 'flex', height: 60, borderTopWidth: 1, borderTopColor: '#f0f0f0', elevation: 0 } }} />
+      <Tabs.Screen name="payments" options={{ href: null, tabBarStyle: { display: 'flex', height: 60, borderTopWidth: 1, borderTopColor: '#f0f0f0', elevation: 0 } }} />
+      <Tabs.Screen name="schedule" options={{ href: null, tabBarStyle: { display: 'flex', height: 60, borderTopWidth: 1, borderTopColor: '#f0f0f0', elevation: 0 } }} />
+      <Tabs.Screen name="bookings" options={{ href: null, tabBarStyle: { display: 'flex', height: 60, borderTopWidth: 1, borderTopColor: '#f0f0f0', elevation: 0 } }} />
+      <Tabs.Screen name="applications" options={{ href: null, tabBarStyle: { display: 'flex', height: 60, borderTopWidth: 1, borderTopColor: '#f0f0f0', elevation: 0 } }} />
+      <Tabs.Screen name="terms" options={{ href: null, tabBarStyle: { display: 'none' } }} />
+      <Tabs.Screen name="allproperties" options={{ href: null, tabBarStyle: { display: 'flex', height: 60, borderTopWidth: 1, borderTopColor: '#f0f0f0', elevation: 0 } }} />
+      <Tabs.Screen name="landlordproperties" options={{ href: null, tabBarStyle: { display: 'flex', height: 60, borderTopWidth: 1, borderTopColor: '#f0f0f0', elevation: 0 } }} />
+      <Tabs.Screen name="assigntenant" options={{ href: null, tabBarStyle: { display: 'flex', height: 60, borderTopWidth: 1, borderTopColor: '#f0f0f0', elevation: 0 } }} />
     </Tabs>
   );
 }

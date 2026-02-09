@@ -1,9 +1,9 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, RefreshControl } from 'react-native';
-import { supabase } from '../../lib/supabase';
-import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { supabase } from '../../lib/supabase';
 
 
 export default function NotificationsPage() {
@@ -34,7 +34,7 @@ export default function NotificationsPage() {
       .eq('recipient', userId)
       .order('created_at', { ascending: false })
       .limit(50);
-    
+
     if (!error) setNotifications(data || []);
     setLoading(false);
     setRefreshing(false);
@@ -78,10 +78,10 @@ export default function NotificationsPage() {
 
     // Navigation Logic based on Type
     if (notif.link) {
-        // If a direct link exists (rare in mobile, but handled)
-        // router.push(notif.link); 
-    } 
-    
+      // If a direct link exists (rare in mobile, but handled)
+      // router.push(notif.link); 
+    }
+
     switch (notif.type) {
       case 'payment':
       case 'payment_confirmed':
@@ -104,7 +104,7 @@ export default function NotificationsPage() {
         break;
       default:
         // Default fallback
-        router.push('/(tabs)/profile'); 
+        router.push('/(tabs)/profile');
     }
   };
 
@@ -115,8 +115,8 @@ export default function NotificationsPage() {
       "Are you sure you want to remove this?",
       [
         { text: "Cancel", style: "cancel" },
-        { 
-          text: "Delete", 
+        {
+          text: "Delete",
           style: 'destructive',
           onPress: async () => {
             const { error } = await supabase.from('notifications').delete().eq('id', id);
@@ -152,8 +152,8 @@ export default function NotificationsPage() {
 
   // --- Render Item ---
   const renderItem = ({ item }: { item: any }) => (
-    <TouchableOpacity 
-      style={[styles.card, !item.read && styles.unreadCard]} 
+    <TouchableOpacity
+      style={[styles.card, !item.read && styles.unreadCard]}
       onPress={() => handleNotificationClick(item)}
       activeOpacity={0.7}
     >
@@ -186,7 +186,7 @@ export default function NotificationsPage() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <Text style={styles.title}>Notifications</Text>
         {notifications.some(n => !n.read) && (
@@ -219,11 +219,11 @@ export default function NotificationsPage() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f9f9f9' },
-  header: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    paddingHorizontal: 20, 
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
     paddingVertical: 15,
     backgroundColor: 'white',
     borderBottomWidth: 1,
@@ -231,12 +231,12 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 24, fontWeight: 'bold' },
   markReadText: { color: 'blue', fontWeight: '600' },
-  
-  card: { 
+
+  card: {
     flexDirection: 'row',
-    backgroundColor: 'white', 
-    padding: 15, 
-    borderRadius: 12, 
+    backgroundColor: 'white',
+    padding: 15,
+    borderRadius: 12,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: '#eee',
@@ -257,9 +257,9 @@ const styles = StyleSheet.create({
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: 'blue' },
   message: { fontSize: 14, color: '#333', marginBottom: 8, lineHeight: 20 },
   date: { fontSize: 12, color: '#999' },
-  
+
   deleteBtn: { justifyContent: 'center', paddingLeft: 10 },
-  
+
   emptyContainer: { alignItems: 'center', marginTop: 100 },
   emptyText: { color: '#999', marginTop: 10, fontSize: 16 }
 });

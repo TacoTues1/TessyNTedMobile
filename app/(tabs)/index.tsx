@@ -4,8 +4,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Modal,
-  ScrollView,
   StyleSheet,
   Text, TouchableOpacity,
   TouchableWithoutFeedback,
@@ -144,24 +144,26 @@ export default function Dashboard() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
 
       {/* --- HEADER (Always Visible) --- */}
       <View style={styles.header}>
-        <View>
-          <Text style={styles.greeting}>Welcome</Text>
-          <Text style={styles.username}>
-            {profile?.first_name || 'User'} {profile?.last_name || ''}
-          </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <Image source={require('../../assets/images/home.png')} style={styles.logoImage} />
+          <Text style={styles.brandName}>TessyNTed</Text>
         </View>
         <TouchableOpacity
           style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
           onPress={() => setMenuVisible(true)}
         >
           <View style={styles.profileBtn}>
-            <Text style={styles.avatarText}>
-              {profile?.first_name?.[0]?.toUpperCase() || "U"}
-            </Text>
+            {profile?.avatar_url ? (
+              <Image source={{ uri: profile.avatar_url }} style={styles.avatarImage} />
+            ) : (
+              <Text style={styles.avatarText}>
+                {profile?.first_name?.[0]?.toUpperCase() || "U"}
+              </Text>
+            )}
           </View>
           <Ionicons name="chevron-down" size={20} color="#333" />
         </TouchableOpacity>
@@ -198,11 +200,7 @@ export default function Dashboard() {
       ) : (
         // --- NORMAL DASHBOARD ---
         profile?.role === 'landlord' ? (
-          <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
-            <View style={{ padding: 20 }}>
-              <LandlordDashboard session={session} profile={profile} />
-            </View>
-          </ScrollView>
+          <LandlordDashboard session={session} profile={profile} />
         ) : (
           <TenantDashboard session={session} profile={profile} />
         )
@@ -263,6 +261,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#eee",
   },
+  logoImage: { width: 36, height: 36, borderRadius: 10 },
+  brandName: { fontSize: 20, fontWeight: '900', color: '#111', letterSpacing: -0.5 },
   greeting: { fontSize: 14, color: "#666" },
   username: { fontSize: 24, fontWeight: "bold" },
   profileBtn: {
@@ -272,7 +272,9 @@ const styles = StyleSheet.create({
     backgroundColor: "black",
     justifyContent: "center",
     alignItems: "center",
+    overflow: 'hidden',
   },
+  avatarImage: { width: 40, height: 40, borderRadius: 20 },
   avatarText: { color: "white", fontSize: 16, fontWeight: "bold" },
 
   // Locked View Styles (Black & White)
@@ -310,24 +312,26 @@ const styles = StyleSheet.create({
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.2)" },
   dropdownMenu: {
     position: "absolute",
-    top: 110,
+    top: 85, // Adjusted to sit right below the header (approx 80 height)
     right: 20,
-    width: 240,
+    width: 220,
     backgroundColor: "white",
-    borderRadius: 12,
-    padding: 5,
+    borderRadius: 16,
+    padding: 8,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
     elevation: 10,
+    borderWidth: 1,
+    borderColor: '#f0f0f0',
   },
   menuItem: {
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: 12,
-    paddingHorizontal: 10,
-    borderRadius: 8,
+    paddingHorizontal: 15,
+    borderRadius: 12,
   },
   menuIconBox: { width: 30, alignItems: "center", marginRight: 10 },
   menuText: { flex: 1, fontSize: 15, color: "#333" },

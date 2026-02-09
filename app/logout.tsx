@@ -15,7 +15,7 @@ export default function LogoutScreen() {
                 console.error("Logout error:", error);
             } finally {
                 // 2. Redirect to Login Screen
-                router.replace('/');
+                router.replace('/login');
             }
         };
 
