@@ -102,9 +102,18 @@ export default function NotificationsPage() {
       case 'booking_rejected':
         router.push('/(tabs)/bookings');
         break;
+      case 'end_occupancy_request':
+      case 'end_request_approved':
+      case 'contract_renewal_request':
+      case 'contract_renewal_approved':
+      case 'contract_renewal_rejected':
+      case 'occupancy_assigned':
+      case 'occupancy_ended':
+        router.push('/(tabs)/' as any);
+        break;
       default:
         // Default fallback
-        router.push('/(tabs)/profile');
+        router.push('/(tabs)/' as any);
     }
   };
 
@@ -182,6 +191,9 @@ export default function NotificationsPage() {
     if (type?.includes('payment')) return { color: 'green' };
     if (type?.includes('maintenance')) return { color: 'orange' };
     if (type?.includes('message')) return { color: 'purple' };
+    if (type?.includes('end_occupancy') || type?.includes('end_request')) return { color: '#dc2626' };
+    if (type?.includes('renewal') || type?.includes('occupancy')) return { color: '#2563eb' };
+    if (type?.includes('booking')) return { color: '#b45309' };
     return { color: '#666' };
   };
 

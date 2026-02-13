@@ -2,15 +2,16 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Linking from 'expo-linking';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { 
-  ActivityIndicator, Alert, Dimensions, Image, Modal, ScrollView, 
-  StyleSheet, Text, TextInput, TouchableOpacity, View, Platform 
+import {
+  ActivityIndicator, Alert, Dimensions,
+  FlatList,
+  Image, Modal, ScrollView,
+  StyleSheet, Text, TextInput, TouchableOpacity, View
 } from 'react-native';
-import { createNotification } from '../../lib/notifications';
+import MapView, { Marker } from 'react-native-maps';
 import { supabase } from '../../lib/supabase';
 
-// ⚠️ REPLACE WITH YOUR LOCAL IP (Same as your other files)
-const API_URL = 'http://192.168.1.5:3000'; 
+const API_URL = process.env.EXPO_PUBLIC_API_URL || '';
 
 const { width, height } = Dimensions.get('window');
 
@@ -41,6 +42,14 @@ export default function PropertyDetail() {
   const [showGalleryModal, setShowGalleryModal] = useState(false);
   const [showAllReviews, setShowAllReviews] = useState(false);
   const [showAllAmenities, setShowAllAmenities] = useState(false);
+  const [reviewFilter, setReviewFilter] = useState('most_relevant');
+  const [showAllReviewsModal, setShowAllReviewsModal] = useState(false);
+  const [directionInput, setDirectionInput] = useState('');
+
+  // Location
+  const [routeCoords, setRouteCoords] = useState<any[]>([]);
+  const [routeInfo, setRouteInfo] = useState<any>(null);
+  const [isRouting, setIsRouting] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -143,9 +152,23 @@ export default function PropertyDetail() {
 
     const match = atMatch || qMatch || placeMatch;
     if (match) {
-      return { lat: match[1], lng: match[2] };
+      return { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
     }
     return null;
+  };
+
+  // --- MAP ROUTING (Ported) ---
+  const calculateRoute = async () => {
+    if (!property) return;
+    setIsRouting(true);
+    // Use device location (simulated for now or use expo-location if permissible, 
+    // but user code uses browser geolocation. We'll simplify to just showing the property on map first 
+    // or routing from a fixed point if needed. 
+    // For this merge, we'll focus on the MapView marker first.)
+
+    // NOTE: Real routing requires user location. 
+    // We will leave this placeholder or implement if requested with expo-location.
+    setIsRouting(false);
   };
 
   // --- ACTIONS ---
@@ -169,64 +192,62 @@ export default function PropertyDetail() {
     if (!selectedSlotId) return Alert.alert('Error', 'Please select a viewing time.');
     setSubmitting(true);
 
-    // 1. Check Active Occupancy
-    const { data: activeOcc } = await supabase
-      .from('tenant_occupancies')
-      .select('id')
-      .eq('property_id', id)
-      .eq('tenant_id', session.user.id)
-      .in('status', ['active', 'pending_end'])
-      .maybeSingle();
+    try {
+      // 1. Check Active Occupancy
+      const { data: activeOcc } = await supabase
+        .from('tenant_occupancies')
+        .select('id')
+        .eq('property_id', id)
+        .eq('tenant_id', session.user.id)
+        .in('status', ['active', 'pending_end'])
+        .maybeSingle();
 
-    if (activeOcc) {
-      setSubmitting(false);
-      return Alert.alert('Error', 'You are currently occupying this property.');
-    }
+      if (activeOcc) {
+        throw new Error('You are currently occupying this property.');
+      }
 
-    // 2. Check Existing Booking
-    const { data: globalActive } = await supabase
-      .from('bookings')
-      .select('id')
-      .eq('tenant', session.user.id)
-      .in('status', ['pending', 'pending_approval', 'approved', 'accepted'])
-      .maybeSingle();
+      // 2. Check Existing Booking
+      const { data: globalActive } = await supabase
+        .from('bookings')
+        .select('id')
+        .eq('tenant', session.user.id)
+        .in('status', ['pending', 'pending_approval', 'approved', 'accepted'])
+        .maybeSingle();
 
-    if (globalActive) {
-      setSubmitting(false);
-      return Alert.alert('Limit Reached', 'You already have an active viewing request. Cancel it first.');
-    }
+      if (globalActive) {
+        throw new Error('You already have an active viewing request. Cancel it first.');
+      }
 
-    // 3. Create Booking
-    const slot = timeSlots.find(s => s.id === selectedSlotId);
-    if (!slot) return;
+      // 3. Create Booking
+      const slot = timeSlots.find(s => s.id === selectedSlotId);
+      if (!slot) throw new Error('Time slot not found.');
 
-    const { data: newBooking, error } = await supabase.from('bookings').insert({
-      property_id: id,
-      tenant: session.user.id,
-      landlord: property.landlord,
-      start_time: slot.start_time,
-      end_time: slot.end_time,
-      booking_date: slot.start_time,
-      time_slot_id: slot.id,
-      status: 'pending',
-      notes: bookingNote || 'No message provided'
-    }).select().single();
+      const { data: newBooking, error: bookingError } = await supabase.from('bookings').insert({
+        property_id: id,
+        tenant: session.user.id,
+        landlord: property.landlord,
+        start_time: slot.start_time,
+        end_time: slot.end_time,
+        booking_date: slot.start_time,
+        time_slot_id: slot.id,
+        status: 'pending',
+        notes: bookingNote || 'No message provided'
+      }).select().single();
 
-    if (error) {
-      Alert.alert('Error', error.message);
-    } else {
+      if (bookingError) throw bookingError;
+
       // 4. Update Slot
       await supabase.from('available_time_slots').update({ is_booked: true }).eq('id', slot.id);
 
       // 5. Notifications (Supabase + API/SMS)
       if (property.landlord) {
-        // In-App (Supabase)
-        await createNotification(
-          property.landlord,
-          'new_booking',
-          `${profile?.first_name || 'A tenant'} requested a viewing for ${property.title}.`,
-          { actor: session.user.id }
-        );
+        // In-App (Supabase) - REMOVED due to RLS. Handled via /api/notify if backend supports.
+        // await createNotification(
+        //   property.landlord,
+        //   'new_booking',
+        //   `${profile?.first_name || 'A tenant'} requested a viewing for ${property.title}.`,
+        //   { actor: session.user.id }
+        // );
 
         // Notify API (Email/System)
         try {
@@ -241,7 +262,7 @@ export default function PropertyDetail() {
           });
         } catch (e) { console.log('Notify API Error:', e); }
 
-        // SMS Notification (Ported from Next.js)
+        // SMS Notification
         if (landlordProfile?.phone) {
           try {
             fetch(`${API_URL}/api/send-sms`, {
@@ -261,30 +282,35 @@ export default function PropertyDetail() {
       Alert.alert('Success', 'Viewing request sent successfully!');
       handleCancelBooking();
       router.push('/bookings');
+    } catch (err: any) {
+      console.log('Booking Error:', err);
+      Alert.alert('Error', err.message || 'Failed to book viewing.');
+    } finally {
+      setSubmitting(false);
     }
-    setSubmitting(false);
   };
 
-  const handleDirections = () => {
+  const handleDirections = (useCurrent = false) => {
     if (!property) return;
-    
+
     // Attempt to get coordinates from the location link (better accuracy)
     const coords = extractCoordinates(property.location_link);
-    
+
     router.push({
       pathname: '/getDirections',
       params: {
         to: property.address + ', ' + property.city,
         lat: coords ? coords.lat : property.latitude || '',
         lng: coords ? coords.lng : property.longitude || '',
-        auto: 'true'
+        auto: useCurrent ? 'true' : 'false',
+        from: useCurrent ? '' : directionInput
       }
     } as any);
   };
 
   const openTerms = () => {
-    const link = property.terms_conditions && property.terms_conditions.startsWith('http') 
-      ? property.terms_conditions 
+    const link = property.terms_conditions && property.terms_conditions.startsWith('http')
+      ? property.terms_conditions
       : `${API_URL}/terms`; // Fallback
     Linking.openURL(link);
   };
@@ -364,7 +390,14 @@ export default function PropertyDetail() {
             </View>
           </View>
 
-          <Text style={styles.address}>{property.address}, {property.city} {property.zip}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 20 }}>
+            <View style={styles.iconCircle}>
+              <Ionicons name="location" size={14} color="#666" />
+            </View>
+            <Text style={{ fontSize: 14, color: '#666' }}>
+              {property.address}, {property.city} {property.zip}
+            </Text>
+          </View>
 
           {/* SPECS */}
           <View style={styles.specsContainer}>
@@ -399,39 +432,77 @@ export default function PropertyDetail() {
             <Text style={styles.description}>{property.description || 'No description provided.'}</Text>
           </View>
 
-          {/* REVIEWS SUMMARY */}
+          {/* REVIEWS DETAILED SECTION */}
           <View style={styles.section}>
             <View style={styles.rowBetween}>
               <Text style={styles.sectionTitle}>Reviews <Text style={{ fontWeight: 'normal', fontSize: 14, color: '#666' }}>({reviews.length})</Text></Text>
+              {reviews.length > 0 && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Ionicons name="star" size={16} color="#facc15" />
+                  <Text style={{ fontWeight: '900', fontSize: 16 }}>{avgRating}</Text>
+                </View>
+              )}
             </View>
 
             {reviews.length > 0 ? (
-              <View style={styles.ratingCard}>
-                <View style={styles.rowBetween}>
-                  <View style={styles.bigRatingBox}>
-                    <Ionicons name="star" size={24} color="#facc15" />
-                    <View>
-                      <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
-                        <Text style={styles.bigRatingValue}>{avgRating}</Text>
-                        <Text style={styles.bigRatingTotal}>/5</Text>
+              <View>
+                {/* Category Breakdown */}
+                <View style={styles.catRow}>
+                  {[
+                    { label: 'Cleanliness', val: cleanliness, color: '#3b82f6', icon: 'sparkles' },
+                    { label: 'Communication', val: communication, color: '#22c55e', icon: 'chatbubbles' },
+                    { label: 'Location', val: locationRating, color: '#f97316', icon: 'location' }
+                  ].map((cat, idx) => (
+                    <View key={idx} style={styles.catCard}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 5 }}>
+                        <Ionicons name={cat.icon as any} size={12} color={cat.color} />
+                        <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#666' }}>{cat.label}</Text>
                       </View>
-                      <Text style={styles.ratingLabel}>Overall</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                        <Text style={{ fontSize: 14, fontWeight: '900' }}>{cat.val}</Text>
+                        <View style={{ flex: 1, height: 4, backgroundColor: '#eee', borderRadius: 2 }}>
+                          <View style={{ width: `${(parseFloat(cat.val) / 5) * 100}%`, height: '100%', backgroundColor: cat.color, borderRadius: 2 }} />
+                        </View>
+                      </View>
                     </View>
-                  </View>
-                  <View style={styles.catRatings}>
-                    <View style={styles.catItem}>
-                      <Ionicons name="sparkles-outline" size={14} color="#2563eb" />
-                      <Text style={{ fontSize: 12, fontWeight: 'bold' }}>{cleanliness}</Text>
+                  ))}
+                </View>
+
+                {/* Review List Preview */}
+                <View style={{ marginTop: 15 }}>
+                  {reviews.slice(0, 3).map((rev, i) => (
+                    <View key={i} style={styles.reviewItem}>
+                      <View style={styles.rowBetween}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                          <View style={styles.reviewAvatar}>
+                            <Text style={{ fontWeight: 'bold', color: '#666' }}>{rev.tenant?.first_name?.charAt(0)}</Text>
+                          </View>
+                          <View>
+                            <Text style={styles.reviewerName}>{rev.tenant?.first_name} {rev.tenant?.last_name}</Text>
+                            <Text style={styles.reviewDate}>{new Date(rev.created_at).toLocaleDateString()}</Text>
+                          </View>
+                        </View>
+                        <View style={styles.smallRatingBadge}>
+                          <Ionicons name="star" size={10} color="#facc15" />
+                          <Text style={{ fontSize: 10, fontWeight: 'bold' }}>{rev.rating}</Text>
+                        </View>
+                      </View>
+
+                      {/* Tags */}
+                      <View style={{ flexDirection: 'row', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
+                        <Text style={styles.microTag}>Cleanliness: {rev.cleanliness_rating || rev.rating}</Text>
+                        <Text style={styles.microTag}>Comm: {rev.communication_rating || rev.rating}</Text>
+                        <Text style={styles.microTag}>Loc: {rev.location_rating || rev.rating}</Text>
+                      </View>
+
+                      <Text style={styles.reviewText} numberOfLines={3}>{rev.comment}</Text>
                     </View>
-                    <View style={styles.catItem}>
-                      <Ionicons name="chatbubble-outline" size={14} color="#16a34a" />
-                      <Text style={{ fontSize: 12, fontWeight: 'bold' }}>{communication}</Text>
-                    </View>
-                    <View style={styles.catItem}>
-                      <Ionicons name="location-outline" size={14} color="#ea580c" />
-                      <Text style={{ fontSize: 12, fontWeight: 'bold' }}>{locationRating}</Text>
-                    </View>
-                  </View>
+                  ))}
+                  {reviews.length > 3 && (
+                    <TouchableOpacity onPress={() => setShowAllReviewsModal(true)} style={styles.showMoreBtn}>
+                      <Text style={{ fontWeight: 'bold', fontSize: 13 }}>See all {reviews.length} reviews</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               </View>
             ) : (
@@ -440,77 +511,99 @@ export default function PropertyDetail() {
                 <Text style={{ color: '#999', marginTop: 5 }}>No reviews yet</Text>
               </View>
             )}
-
-            {/* REVIEW LIST */}
-            {reviews.length > 0 && (
-              <View style={{ marginTop: 15 }}>
-                {(showAllReviews ? reviews : reviews.slice(0, 2)).map((rev, i) => (
-                  <View key={i} style={styles.reviewItem}>
-                    <View style={styles.rowBetween}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                        <View style={styles.reviewAvatar}>
-                          <Text style={{ fontWeight: 'bold', color: '#666' }}>{rev.tenant?.first_name?.charAt(0)}</Text>
-                        </View>
-                        <View>
-                          <Text style={styles.reviewerName}>{rev.tenant?.first_name} {rev.tenant?.last_name}</Text>
-                          <Text style={styles.reviewDate}>{new Date(rev.created_at).toLocaleDateString()}</Text>
-                        </View>
-                      </View>
-                      <View style={styles.smallRatingBadge}>
-                        <Ionicons name="star" size={10} color="#facc15" />
-                        <Text style={{ fontSize: 10, fontWeight: 'bold' }}>{rev.rating}</Text>
-                      </View>
-                    </View>
-                    <Text style={styles.reviewText}>{rev.comment}</Text>
-                  </View>
-                ))}
-                {reviews.length > 2 && (
-                  <TouchableOpacity onPress={() => setShowAllReviews(!showAllReviews)} style={styles.showMoreBtn}>
-                    <Text style={{ fontWeight: 'bold', fontSize: 12 }}>{showAllReviews ? 'Show Less' : `Show all ${reviews.length} reviews`}</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            )}
           </View>
 
-          {/* LOCATION PREVIEW */}
+          {/* LOCATION WITH INPUT */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Location</Text>
             <View style={styles.mapCard}>
-              <View style={styles.mapPlaceholder}>
-                <Ionicons name="map" size={40} color="#ccc" />
-                <Text style={{ color: '#666', marginTop: 5 }}>Map Preview</Text>
+              {/* Directions Input */}
+              <View style={styles.dirInputContainer}>
+                <View style={styles.dirInputRow}>
+                  <Ionicons name="location" size={16} color="#2563eb" style={{ marginRight: 8 }} />
+                  <TextInput
+                    style={{ flex: 1, fontSize: 12, paddingVertical: 4 }}
+                    placeholder="Enter your location..."
+                    placeholderTextColor="#999"
+                    value={directionInput}
+                    onChangeText={setDirectionInput}
+                  />
+                  {directionInput.length > 0 && (
+                    <TouchableOpacity onPress={() => handleDirections(false)}>
+                      <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#2563eb' }}>GO</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+                <TouchableOpacity style={styles.myLocBtn} onPress={() => handleDirections(true)}>
+                  <Ionicons name="navigate" size={14} color="#666" />
+                  <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#666' }}>Use My Location</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Map View */}
+              <View style={styles.mapContainer}>
+                {property.location_link || (property.latitude && property.longitude) ? (
+                  <MapView
+                    style={StyleSheet.absoluteFillObject}
+                    initialRegion={{
+                      latitude: property.latitude || extractCoordinates(property.location_link)?.lat || 10.3157,
+                      longitude: property.longitude || extractCoordinates(property.location_link)?.lng || 123.8854,
+                      latitudeDelta: 0.01,
+                      longitudeDelta: 0.01,
+                    }}
+                    scrollEnabled={false}
+                  >
+                    <Marker
+                      coordinate={{
+                        latitude: property.latitude || extractCoordinates(property.location_link)?.lat || 10.3157,
+                        longitude: property.longitude || extractCoordinates(property.location_link)?.lng || 123.8854,
+                      }}
+                      title={property.title}
+                    />
+                  </MapView>
+                ) : (
+                  <View style={styles.center}><Text style={{ color: '#666' }}>Map not available</Text></View>
+                )}
               </View>
               <View style={styles.mapFooter}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-                  <Ionicons name="location-sharp" size={16} color="#666" />
-                  <TouchableOpacity onPress={handleDirections}>
-                    <Text style={styles.linkText}>GET DIRECTIONS</Text>
-                  </TouchableOpacity>
-                </View>
+                <Text style={{ fontSize: 12, color: '#666', flex: 1 }} numberOfLines={1}>{property.address}, {property.city}</Text>
+                <TouchableOpacity onPress={() => handleDirections(true)}>
+                  <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#2563eb' }}>View Larger Map</Text>
+                </TouchableOpacity>
               </View>
             </View>
           </View>
 
-          {/* LANDLORD & BOOKING ACTION */}
+          {/* LANDLORD & CONTACT SECTION */}
           <View style={styles.section}>
-            <View style={styles.landlordCard}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 15, paddingBottom: 15, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' }}>
+            <View style={styles.landlordContainer}>
+              {/* Header */}
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+                <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>Posted by</Text>
+                <Text style={{ fontSize: 10, color: '#999' }}>Joined {landlordProfile?.created_at ? new Date(landlordProfile.created_at).getFullYear() : 'Recently'}</Text>
+              </View>
+
+              {/* Profile */}
+              <View style={styles.hostProfile}>
                 {landlordProfile?.avatar_url ? (
-                  <Image source={{ uri: landlordProfile.avatar_url }} style={styles.landlordAvatar} />
+                  <Image source={{ uri: landlordProfile.avatar_url }} style={styles.hostAvatar} />
                 ) : (
-                  <View style={styles.landlordAvatarPlaceholder}>
-                    <Text style={{ color: 'white', fontWeight: 'bold' }}>{landlordProfile?.first_name?.charAt(0)}</Text>
+                  <View style={styles.hostAvatarPlaceholder}>
+                    <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 18 }}>{landlordProfile?.first_name?.charAt(0)}</Text>
                   </View>
                 )}
-                <View style={{ flex: 1 }}>
+                <View>
                   <Text style={{ fontWeight: 'bold', fontSize: 16 }}>{landlordProfile?.first_name} {landlordProfile?.last_name}</Text>
-                  <Text style={{ color: '#666', fontSize: 12 }}>Property Owner</Text>
+                  {/* <Text style={{ fontSize: 12, color: '#666' }}>{landlordProfile?.role === 'landlord' ? 'Posted By' : 'Agent'}</Text>
+                  <View style={{ flexDirection: 'row', gap: 2, marginTop: 2 }}>
+                    {[1, 2, 3, 4, 5].map(s => <Ionicons key={s} name="star" size={10} color="#facc15" />)}
+                    <Text style={{ fontSize: 10, color: '#999', marginLeft: 4 }}>(superhost)</Text>
+                  </View> */}
                 </View>
               </View>
 
               {/* CONTACT INFO */}
-              {(property.owner_phone || property.owner_email) && (
+              {(property.owner_phone || property.owner_email || landlordProfile?.city) && (
                 <View style={{ marginBottom: 15, gap: 8 }}>
                   {property.owner_phone && (
                     <View style={styles.contactRow}>
@@ -518,95 +611,158 @@ export default function PropertyDetail() {
                       <Text onPress={() => Linking.openURL(`tel:${property.owner_phone}`)} style={{ fontWeight: '500' }}>{property.owner_phone}</Text>
                     </View>
                   )}
-                  {/* Email Logic */}
                   {property.owner_email && (
-                     <View style={styles.contactRow}>
-                        <View style={styles.iconCircle}><Ionicons name="mail" size={14} color="#666" /></View>
-                        <Text onPress={() => Linking.openURL(`mailto:${property.owner_email}`)} style={{ fontWeight: '500' }}>{property.owner_email}</Text>
-                     </View>
+                    <View style={styles.contactRow}>
+                      <View style={styles.iconCircle}><Ionicons name="mail" size={14} color="#666" /></View>
+                      <Text onPress={() => Linking.openURL(`mailto:${property.owner_email}`)} style={{ fontWeight: '500' }}>{property.owner_email}</Text>
+                    </View>
+                  )}
+                  {/* Location Logic */}
+                  {(property.address || property.city) && (
+                    <View style={styles.contactRow}>
+                      <View style={styles.iconCircle}><Ionicons name="location" size={14} color="#666" /></View>
+                      <Text style={{ fontWeight: '500' }}>{property.address}, {property.city} {property.zip}</Text>
+                    </View>
                   )}
                 </View>
               )}
 
-              {/* ACTION LOGIC */}
-              {isOwner ? (
-                <View style={{ gap: 10 }}>
-                  <View style={styles.infoBoxBlue}><Text style={styles.infoTextBlue}>You own this property.</Text></View>
-                  <TouchableOpacity style={styles.btnBlack} onPress={() => router.push(`/properties/edit/${property.id}` as any)}>
-                    <Text style={styles.btnTextWhite}>Edit Property</Text>
+              {/* Warning / Actions */}
+              <View style={{ marginTop: 20 }}>
+                {isOwner ? (
+                  <View style={styles.infoBoxBlue}><Text style={styles.infoTextBlue}>You are the owner of this property.</Text></View>
+                ) : isLandlordRole ? (
+                  <View style={styles.infoBoxGray}><Text style={styles.infoTextGray}>Logged in as Landlord</Text></View>
+                ) : activeOccupancyCheck(hasActiveOccupancy, occupiedPropertyTitle) ? (
+                  <View style={styles.infoBoxYellow}><Text style={styles.infoTextYellow}>You have an active occupancy.</Text></View>
+                ) : !showBookingOptions && (
+                  <TouchableOpacity style={styles.btnBlack} onPress={handleOpenBooking}>
+                    <Text style={styles.btnTextWhite}>Book a Viewing</Text>
                   </TouchableOpacity>
-                </View>
-              ) : isLandlordRole ? (
-                <View style={styles.infoBoxGray}><Text style={styles.infoTextGray}>Landlords cannot book viewings.</Text></View>
-              ) : activeOccupancyCheck(hasActiveOccupancy, occupiedPropertyTitle) ? (
-                <View style={styles.infoBoxYellow}>
-                  <Text style={styles.infoTextYellowHeader}>Active Occupancy</Text>
-                  <Text style={styles.infoTextYellow}>Assigned to {occupiedPropertyTitle}</Text>
-                </View>
-              ) : property.status !== 'available' ? (
-                <View style={styles.infoBoxGray}><Text style={styles.infoTextGray}>Not available for booking.</Text></View>
-              ) : (
-                <View>
-                  {!showBookingOptions ? (
-                    <TouchableOpacity style={styles.btnBlack} onPress={handleOpenBooking}>
-                      <Ionicons name="calendar" size={18} color="white" style={{ marginRight: 8 }} />
-                      <Text style={styles.btnTextWhite}>Book Viewing</Text>
-                    </TouchableOpacity>
-                  ) : (
-                    <View style={styles.bookingForm}>
-                      <View style={styles.rowBetween}>
-                        <Text style={styles.label}>SELECT SCHEDULE</Text>
-                        <TouchableOpacity onPress={handleCancelBooking}><Ionicons name="close-circle" size={24} color="#ccc" /></TouchableOpacity>
-                      </View>
+                )}
+              </View>
 
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 10 }}>
-                        {timeSlots.length > 0 ? timeSlots.map(slot => (
-                          <TouchableOpacity
-                            key={slot.id}
-                            style={[styles.slotCard, selectedSlotId === slot.id && styles.slotCardActive]}
-                            onPress={() => setSelectedSlotId(slot.id)}
-                          >
-                            <Text style={[styles.slotDate, selectedSlotId === slot.id && { color: 'white' }]}>
-                              {new Date(slot.start_time).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
-                            </Text>
-                            <Text style={[styles.slotTime, selectedSlotId === slot.id && { color: 'white' }]}>
-                              {new Date(slot.start_time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-                            </Text>
-                          </TouchableOpacity>
-                        )) : (
-                          <Text style={{ color: 'red', fontSize: 12 }}>No slots available.</Text>
-                        )}
-                      </ScrollView>
+              {/* Expandable Booking Form */}
+              {showBookingOptions && !isOwner && !isLandlordRole && (
+                <View style={[styles.bookingForm, { marginTop: 15 }]}>
+                  <View style={styles.rowBetween}>
+                    <Text style={styles.label}>SELECT SCHEDULE</Text>
+                    <TouchableOpacity onPress={handleCancelBooking}><Ionicons name="close-circle" size={24} color="#ccc" /></TouchableOpacity>
+                  </View>
 
-                      <Text style={[styles.label, { marginTop: 10 }]}>MESSAGE (OPTIONAL)</Text>
-                      <TextInput
-                        style={styles.textArea}
-                        multiline
-                        numberOfLines={3}
-                        placeholder="Any requests?"
-                        value={bookingNote}
-                        onChangeText={setBookingNote}
-                      />
+                  {/* CALENDAR IMPLEMENTATION */}
+                  {(() => {
+                    const slotsByDate: any = {};
+                    timeSlots.forEach(slot => {
+                      const d = new Date(slot.start_time);
+                      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                      if (!slotsByDate[key]) slotsByDate[key] = [];
+                      slotsByDate[key].push(slot);
+                    });
 
-                      <TouchableOpacity style={styles.checkboxRow} onPress={() => setTermsAccepted(!termsAccepted)}>
-                        <Ionicons name={termsAccepted ? "checkbox" : "square-outline"} size={20} color="black" />
-                        <View style={{flexDirection:'row', flexWrap:'wrap'}}>
-                            <Text style={{ fontSize: 12, marginLeft: 8 }}>I agree to </Text>
-                            <TouchableOpacity onPress={openTerms}>
-                                <Text style={{fontSize: 12, fontWeight: 'bold', textDecorationLine: 'underline'}}>Terms & Conditions</Text>
-                            </TouchableOpacity>
+                    // Generate months (simplified to current + next)
+                    const today = new Date();
+                    const year = today.getFullYear();
+                    const month = today.getMonth();
+                    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+                    const selectedSlotData = timeSlots.find(s => s.id === selectedSlotId);
+                    const selectedDateKey = selectedSlotData
+                      ? `${new Date(selectedSlotData.start_time).getFullYear()}-${String(new Date(selectedSlotData.start_time).getMonth() + 1).padStart(2, '0')}-${String(new Date(selectedSlotData.start_time).getDate()).padStart(2, '0')}`
+                      : null;
+
+                    return (
+                      <View style={styles.calendarContainer}>
+                        {/* Calendar Grid */}
+                        <View style={styles.calendarHeader}>
+                          <Text style={styles.monthName}>{today.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</Text>
                         </View>
-                      </TouchableOpacity>
+                        <View style={styles.weekRow}>
+                          {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => <Text key={i} style={styles.weekDay}>{d}</Text>)}
+                        </View>
+                        <View style={styles.daysGrid}>
+                          {Array.from({ length: daysInMonth }).map((_, i) => {
+                            const day = i + 1;
+                            const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                            const dateObj = new Date(year, month, day);
+                            const hasSlots = !!slotsByDate[dateKey];
+                            const isSelected = selectedDateKey === dateKey;
+                            const isPast = dateObj < new Date(new Date().setHours(0, 0, 0, 0));
 
-                      <TouchableOpacity
-                        style={[styles.btnBlack, (!termsAccepted || !selectedSlotId) && { backgroundColor: '#ccc' }]}
-                        disabled={!termsAccepted || !selectedSlotId || submitting}
-                        onPress={handleConfirmBooking}
-                      >
-                        {submitting ? <ActivityIndicator color="white" /> : <Text style={styles.btnTextWhite}>Confirm Booking</Text>}
+                            return (
+                              <TouchableOpacity
+                                key={day}
+                                disabled={!hasSlots || isPast}
+                                onPress={() => {
+                                  const slots = slotsByDate[dateKey];
+                                  if (slots && slots.length > 0) setSelectedSlotId(slots[0].id);
+                                }}
+                                style={[
+                                  styles.dayCell,
+                                  isSelected && styles.dayCellSelected,
+                                  (!hasSlots || isPast) && styles.dayCellDisabled
+                                ]}
+                              >
+                                <Text style={[styles.dayText, isSelected && { color: 'white' }, (!hasSlots || isPast) && { color: '#ddd' }]}>{day}</Text>
+                                {hasSlots && !isPast && !isSelected && <View style={styles.dayDot} />}
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
+
+                        {/* Time Slot Selector (if date selected) */}
+                        {selectedDateKey && (
+                          <View style={styles.slotSelector}>
+                            <Text style={styles.label}>AVAILABLE TIMES</Text>
+                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 5 }}>
+                              {slotsByDate[selectedDateKey]?.map((slot: any) => {
+                                const isActive = selectedSlotId === slot.id;
+                                return (
+                                  <TouchableOpacity
+                                    key={slot.id}
+                                    onPress={() => setSelectedSlotId(slot.id)}
+                                    style={[styles.timeChip, isActive && styles.timeChipActive]}
+                                  >
+                                    <Text style={[styles.timeChipText, isActive && { color: 'white' }]}>
+                                      {new Date(slot.start_time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                                    </Text>
+                                  </TouchableOpacity>
+                                );
+                              })}
+                            </View>
+                          </View>
+                        )}
+                      </View>
+                    );
+                  })()}
+
+                  <Text style={[styles.label, { marginTop: 15 }]}>MESSAGE (OPTIONAL)</Text>
+                  <TextInput
+                    style={styles.textArea}
+                    multiline
+                    numberOfLines={3}
+                    placeholder="Any requests?"
+                    value={bookingNote}
+                    onChangeText={setBookingNote}
+                  />
+
+                  <TouchableOpacity style={styles.checkboxRow} onPress={() => setTermsAccepted(!termsAccepted)}>
+                    <Ionicons name={termsAccepted ? "checkbox" : "square-outline"} size={20} color="black" />
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                      <Text style={{ fontSize: 12, marginLeft: 8 }}>I agree to </Text>
+                      <TouchableOpacity onPress={openTerms}>
+                        <Text style={{ fontSize: 12, fontWeight: 'bold', textDecorationLine: 'underline' }}>Terms & Conditions</Text>
                       </TouchableOpacity>
                     </View>
-                  )}
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.btnBlack, (!termsAccepted || !selectedSlotId) && { backgroundColor: '#ccc' }]}
+                    disabled={!termsAccepted || !selectedSlotId || submitting}
+                    onPress={handleConfirmBooking}
+                  >
+                    {submitting ? <ActivityIndicator color="white" /> : <Text style={styles.btnTextWhite}>Confirm Booking</Text>}
+                  </TouchableOpacity>
                 </View>
               )}
             </View>
@@ -657,6 +813,56 @@ export default function PropertyDetail() {
               </View>
             ))}
           </ScrollView>
+        </View>
+      </Modal>
+
+      {/* ALL REVIEWS MODAL */}
+      <Modal visible={showAllReviewsModal} animationType="slide">
+        <View style={{ flex: 1, backgroundColor: 'white' }}>
+          <View style={{ padding: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#eee', marginTop: 40 }}>
+            <Text style={{ fontSize: 20, fontWeight: 'bold' }}>All Reviews ({reviews.length})</Text>
+            <TouchableOpacity onPress={() => setShowAllReviewsModal(false)}>
+              <Ionicons name="close" size={24} color="black" />
+            </TouchableOpacity>
+          </View>
+          {/* Filter Tabs */}
+          <View style={{ flexDirection: 'row', padding: 10, borderBottomWidth: 1, borderBottomColor: '#f9fafb' }}>
+            {['most_relevant', 'recent', 'highest', 'lowest'].map(f => (
+              <TouchableOpacity key={f} onPress={() => setReviewFilter(f)} style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, backgroundColor: reviewFilter === f ? 'black' : '#f3f4f6', marginRight: 8 }}>
+                <Text style={{ fontSize: 12, fontWeight: 'bold', color: reviewFilter === f ? 'white' : '#666', textTransform: 'capitalize' }}>{f.replace('_', ' ')}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <FlatList
+            data={reviews.sort((a, b) => {
+              if (reviewFilter === 'recent') return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+              if (reviewFilter === 'highest') return b.rating - a.rating;
+              if (reviewFilter === 'lowest') return a.rating - b.rating;
+              return 0;
+            })}
+            keyExtractor={(item: any) => item.id}
+            contentContainerStyle={{ padding: 20 }}
+            renderItem={({ item }) => (
+              <View style={[styles.reviewItem, { marginTop: 0, marginBottom: 15 }]}>
+                <View style={styles.rowBetween}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <View style={styles.reviewAvatar}>
+                      <Text style={{ fontWeight: 'bold', color: '#666' }}>{item.tenant?.first_name?.charAt(0)}</Text>
+                    </View>
+                    <View>
+                      <Text style={styles.reviewerName}>{item.tenant?.first_name} {item.tenant?.last_name}</Text>
+                      <Text style={styles.reviewDate}>{new Date(item.created_at).toLocaleDateString()}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.smallRatingBadge}>
+                    <Ionicons name="star" size={10} color="#facc15" />
+                    <Text style={{ fontSize: 10, fontWeight: 'bold' }}>{item.rating}</Text>
+                  </View>
+                </View>
+                <Text style={styles.reviewText}>{item.comment}</Text>
+              </View>
+            )}
+          />
         </View>
       </Modal>
 
@@ -761,4 +967,45 @@ const styles = StyleSheet.create({
   galleryModal: { flex: 1, backgroundColor: 'black' },
   galleryClose: { position: 'absolute', top: 50, right: 20, zIndex: 10 },
   galleryCounter: { position: 'absolute', top: 50, left: 20, zIndex: 10 },
+
+  // New Reviews
+  catRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 15 },
+  catCard: { flex: 1, minWidth: '30%', backgroundColor: '#f9fafb', padding: 8, borderRadius: 8 },
+  microTag: { fontSize: 9, color: '#666', backgroundColor: '#f3f4f6', paddingHorizontal: 4, paddingVertical: 2, borderRadius: 4 },
+
+  // Map
+  mapContainer: { height: 200, width: '100%', borderRadius: 12, overflow: 'hidden' },
+
+  // Calendar
+  calendarContainer: { backgroundColor: 'white', borderRadius: 8, padding: 10, marginBottom: 10 },
+  calendarHeader: { alignItems: 'center', marginBottom: 10 },
+  monthName: { fontWeight: 'bold', fontSize: 14 },
+  weekRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
+  weekDay: { width: 30, textAlign: 'center', fontSize: 10, fontWeight: 'bold', color: '#ccc' },
+  daysGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start' },
+  dayCell: { width: '14.28%', aspectRatio: 1, alignItems: 'center', justifyContent: 'center', marginBottom: 5 },
+  dayCellSelected: { backgroundColor: 'black', borderRadius: 20 },
+  dayCellDisabled: { opacity: 0.3 },
+  dayText: { fontSize: 12, fontWeight: 'bold', color: '#333' },
+  dayDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: 'black', position: 'absolute', bottom: 4 },
+
+  slotSelector: { marginTop: 15, paddingTop: 15, borderTopWidth: 1, borderTopColor: '#f3f4f6' },
+  timeChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: '#f3f4f6', borderWidth: 1, borderColor: '#eee' },
+  timeChipActive: { backgroundColor: 'black', borderColor: 'black' },
+  timeChipText: { fontSize: 12, fontWeight: 'bold', color: '#333' },
+
+  // New Location Styles
+  dirInputContainer: { backgroundColor: '#f9fafb', borderRadius: 8, padding: 10, marginBottom: 10 },
+  dirInputRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8, borderWidth: 1, borderColor: '#eee' },
+  myLocBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 8, alignSelf: 'flex-end' },
+
+  // New Landlord Section
+  landlordContainer: { backgroundColor: 'white', borderRadius: 12, padding: 20, borderWidth: 1, borderColor: '#eee' },
+  hostProfile: { flexDirection: 'row', alignItems: 'center', gap: 15, marginBottom: 20 },
+  hostAvatar: { width: 50, height: 50, borderRadius: 25 },
+  hostAvatarPlaceholder: { width: 50, height: 50, borderRadius: 25, backgroundColor: 'black', alignItems: 'center', justifyContent: 'center' },
+  contactGrid: { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  contactBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, backgroundColor: '#f3f4f6', borderRadius: 8 },
+  contactBtnText: { fontWeight: 'bold', fontSize: 12 },
+
 });

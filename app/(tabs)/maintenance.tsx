@@ -518,12 +518,13 @@ export default function MaintenanceScreen() {
         // Send notification to landlord
         if (property && property.landlord) {
           try {
-            await createNotification(
-              property.landlord,
-              'maintenance',
-              `${profile.first_name} ${profile.last_name} submitted a new maintenance request: "${formData.title}"`,
-              { actor: session.user.id, link: '/maintenance' }
-            );
+            // RLS prevents tenant from sending notifications
+            // await createNotification(
+            //   property.landlord,
+            //   'maintenance',
+            //   `${profile.first_name} ${profile.last_name} submitted a new maintenance request: "${formData.title}"`,
+            //   { actor: session.user.id, link: '/maintenance' }
+            // );
           } catch (e) { console.log('Notification error:', e); }
         }
       }

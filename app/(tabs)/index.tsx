@@ -150,7 +150,10 @@ export default function Dashboard() {
       <View style={styles.header}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <Image source={require('../../assets/images/home.png')} style={styles.logoImage} />
-          <Text style={styles.brandName}>TessyNTed</Text>
+          <View>
+            <Text style={styles.brandName}>TessyNTed</Text>
+            <Text style={{ fontSize: 10, color: '#999', fontWeight: '500', marginTop: -1 }}>A Rental Management Platform</Text>
+          </View>
         </View>
         <TouchableOpacity
           style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
@@ -217,7 +220,7 @@ export default function Dashboard() {
                   <MenuOption icon="search-outline" label="All Properties" route="/allproperties" />
                   {profile?.role === "landlord" && (
                     <>
-                      <MenuOption icon="add-circle-outline" label="Add Property" route="/properties/new" />
+                      <MenuOption icon="business-outline" label="My Properties" route="/landlordproperties" />
                       <MenuOption icon="calendar-outline" label="Schedule" route="/schedule" />
                       <MenuOption icon="list-outline" label="Bookings" route="/bookings" />
                     </>
@@ -228,10 +231,8 @@ export default function Dashboard() {
                       <MenuOption icon="calendar-outline" label="Bookings" route="/bookings" />
                     </>
                   )}
-                  <MenuOption icon="chatbubble-ellipses-outline" label="Messages" route="/messages" />
                   <MenuOption icon="hammer-outline" label="Maintenance" route="/maintenance" />
                   <MenuOption icon="card-outline" label="Payments" route="/payments" />
-                  <MenuOption icon="person-outline" label="My Profile" route="/profile" />
                   <View style={styles.divider} />
                 </>
               )}

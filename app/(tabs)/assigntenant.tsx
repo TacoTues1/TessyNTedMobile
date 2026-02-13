@@ -202,9 +202,13 @@ export default function AssignTenantScreen() {
                 is_move_in_payment: true
             });
 
-            // 4. Notify tenant
-            const message = `You have been assigned to "${property.title}" from ${startDate}. Move-in bill sent.`;
-            await createNotification(selectedTenant.tenant, 'occupancy_assigned', message, { actor: session.user.id });
+            // 4. Notify tenant (non-blocking - don't let notification failure block assignment)
+            try {
+                const message = `You have been assigned to "${property.title}" from ${startDate}. Move-in bill sent.`;
+                await createNotification(selectedTenant.tenant, 'occupancy_assigned', message, { actor: session.user.id });
+            } catch (notifErr) {
+                console.log('Notification failed (non-critical):', notifErr);
+            }
 
             Alert.alert('Success', 'Tenant assigned & Move-in bill created!', [
                 { text: 'OK', onPress: () => router.back() }
@@ -393,14 +397,23 @@ export default function AssignTenantScreen() {
                     </View>
 
                     <Text style={styles.label}>Wifi Due Day *</Text>
-                    <TextInput
-                        style={styles.input}
-                        value={wifiDueDay}
-                        onChangeText={setWifiDueDay}
-                        keyboardType="numeric"
-                        placeholder="e.g. 10"
-                        placeholderTextColor="#c4c4c4"
-                    />
+
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-start', marginTop: 5 }}>
+                        {Array.from({ length: 31 }, (_, i) => i + 1).map(day => (
+                            <TouchableOpacity
+                                key={day}
+                                onPress={() => setWifiDueDay(day.toString())}
+                                style={{
+                                    width: 36, height: 36, borderRadius: 18,
+                                    backgroundColor: wifiDueDay === day.toString() ? 'black' : 'white',
+                                    alignItems: 'center', justifyContent: 'center',
+                                    borderWidth: 1, borderColor: wifiDueDay === day.toString() ? 'black' : '#e5e7eb'
+                                }}
+                            >
+                                <Text style={{ fontSize: 12, fontWeight: 'bold', color: wifiDueDay === day.toString() ? 'white' : '#374151' }}>{day}</Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
 
                     <View style={styles.infoBox}>
                         <Ionicons name="flash" size={16} color="#f59e0b" />

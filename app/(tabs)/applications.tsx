@@ -234,12 +234,13 @@ export default function ApplicationsPage() {
       await supabase.from('available_time_slots').update({ is_booked: true }).eq('id', slot.id);
 
       // 3. SEND NOTIFICATION (Fix)
-      await createNotification(
-        selectedApplication.property.landlord,
-        'booking_request',
-        `New viewing request for ${selectedApplication.property.title}`,
-        { actor: session.user.id, link: '/bookings' }
-      );
+      // 3. SEND NOTIFICATION (Fix - RLS prevents tenant from creating notifications)
+      // await createNotification(
+      //   selectedApplication.property.landlord,
+      //   'booking_request',
+      //   `New viewing request for ${selectedApplication.property.title}`,
+      //   { actor: session.user.id, link: '/bookings' }
+      // );
 
       Alert.alert('Success', 'Viewing request sent!');
       setShowBookingModal(false);

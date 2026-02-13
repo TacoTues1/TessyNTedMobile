@@ -16,6 +16,8 @@ import {
     View
 } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
+import CalendarPicker from '../../../components/ui/CalendarPicker';
+import { useRealtime } from '../../../hooks/useRealtime';
 import { createNotification } from '../../../lib/notifications';
 import { supabase } from '../../../lib/supabase';
 
@@ -34,6 +36,7 @@ export default function LandlordDashboard({ session, profile }: any) {
     const [pendingEndRequests, setPendingEndRequests] = useState<any[]>([]);
     const [pendingRenewalRequests, setPendingRenewalRequests] = useState<any[]>([]);
     const [occupancies, setOccupancies] = useState<any[]>([]);
+    const [scheduledViewings, setScheduledViewings] = useState<any[]>([]);
 
     // Financials
     const [monthlyIncome, setMonthlyIncome] = useState({
@@ -96,6 +99,15 @@ export default function LandlordDashboard({ session, profile }: any) {
         }
     }, [profile]);
 
+    useRealtime(
+        ['properties', 'tenant_occupancies', 'maintenance_requests', 'payment_requests', 'bookings'],
+        () => {
+            console.log("Realtime update triggered reload");
+            loadDashboard();
+        },
+        !!profile
+    );
+
     // Auto-calculate end date
     useEffect(() => {
         if (startDate && contractMonths) {
@@ -128,6 +140,7 @@ export default function LandlordDashboard({ session, profile }: any) {
             loadPendingRenewalRequests(),
             loadDashboardTasks(),
             loadMonthlyIncome(),
+            loadScheduledViewings(),
         ]);
         setRefreshing(false);
         setLoading(false);
@@ -145,17 +158,22 @@ export default function LandlordDashboard({ session, profile }: any) {
 
     async function loadOccupancies() {
         const { data } = await supabase.from('tenant_occupancies')
-            .select(`*, tenant:profiles!tenant_occupancies_tenant_id_fkey(id, first_name, last_name, phone), property:properties(id, title)`)
+            .select(`*, tenant:profiles!tenant_occupancies_tenant_id_fkey(id, first_name, last_name, phone), property:properties(id, title, address, images)`)
             .eq('landlord_id', session.user.id)
             .eq('status', 'active');
         setOccupancies(data || []);
     }
 
     async function loadPendingEndRequests() {
-        const { data } = await supabase.from('tenant_occupancies')
+        const { data, error } = await supabase.from('tenant_occupancies')
             .select(`*, tenant:profiles!tenant_occupancies_tenant_id_fkey(id, first_name, last_name, phone), property:properties(id, title, address)`)
             .eq('landlord_id', session.user.id)
             .eq('end_request_status', 'pending');
+        if (error) {
+            console.error('loadPendingEndRequests error:', error);
+        } else {
+            console.log('loadPendingEndRequests:', data?.length, 'pending end requests found');
+        }
         setPendingEndRequests(data || []);
     }
 
@@ -196,6 +214,46 @@ export default function LandlordDashboard({ session, profile }: any) {
             maintenance: maint?.map(m => ({ ...m, property_title: propMap[m.property_id] })) as any || [],
             payments: payments?.map(p => ({ ...p, property_title: propMap[p.property_id] })) as any || []
         });
+    }
+
+    async function loadScheduledViewings() {
+        try {
+            const today = new Date().toISOString().split('T')[0];
+            const { data: myProps } = await supabase.from('properties').select('id, title').eq('landlord', session.user.id);
+
+            if (!myProps || myProps.length === 0) {
+                setScheduledViewings([]);
+                return;
+            }
+
+            const propIds = myProps.map(p => p.id);
+            const propMap = myProps.reduce((acc: any, p: any) => ({ ...acc, [p.id]: p }), {});
+
+            const { data: bookings } = await supabase
+                .from('bookings')
+                .select('*')
+                .in('property_id', propIds)
+                .in('status', ['approved', 'accepted'])
+                .gte('booking_date', `${today}T00:00:00`)
+                .lte('booking_date', `${today}T23:59:59`);
+
+            if (bookings && bookings.length > 0) {
+                const tenantIds = bookings.map((b: any) => b.tenant);
+                const { data: profiles } = await supabase.from('profiles').select('id, first_name, last_name').in('id', tenantIds);
+                const profileMap = (profiles || []).reduce((acc: any, p: any) => ({ ...acc, [p.id]: p }), {});
+
+                const enriched = bookings.map((b: any) => ({
+                    ...b,
+                    property: propMap[b.property_id],
+                    tenant_profile: profileMap[b.tenant]
+                }));
+                setScheduledViewings(enriched);
+            } else {
+                setScheduledViewings([]);
+            }
+        } catch (e) {
+            console.log('Error loading scheduled viewings:', e);
+        }
     }
 
     // --- FINANCIAL LOGIC ---
@@ -472,9 +530,13 @@ export default function LandlordDashboard({ session, profile }: any) {
             is_move_in_payment: true
         });
 
-        // 4. Notify
-        const message = `You have been assigned to "${selectedProperty.title}" from ${startDate}. Move-in bill sent.`;
-        await createNotification(candidate.tenant, 'occupancy_assigned', message, { actor: session.user.id });
+        // 4. Notify (non-blocking)
+        try {
+            const message = `You have been assigned to "${selectedProperty.title}" from ${startDate}. Move-in bill sent.`;
+            await createNotification(candidate.tenant, 'occupancy_assigned', message, { actor: session.user.id });
+        } catch (notifErr) {
+            console.log('Notification failed (non-critical):', notifErr);
+        }
 
         setUploadingContract(false);
         Alert.alert('Success', 'Tenant assigned & Move-in bill created!');
@@ -758,52 +820,100 @@ export default function LandlordDashboard({ session, profile }: any) {
                 </View>
             </View>
 
-            {/* --- PROPERTIES LIST (Row Layout, Max 2) --- */}
+            {/* --- SCHEDULED TENANTS TODAY --- */}
             <View style={styles.sectionContainer}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
-                    <Text style={styles.sectionTitle}>Your Properties</Text>
-                    <Text style={{ fontSize: 12, color: '#666' }}>{properties.length} total</Text>
+                    <Text style={styles.sectionTitle}>Today's Viewings</Text>
+                    <View style={[styles.badge, { backgroundColor: '#f3f4f6' }]}>
+                        <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#111' }}>{scheduledViewings.length}</Text>
+                    </View>
                 </View>
-                <View style={{ flexDirection: 'row', gap: 12 }}>
-                    {properties.slice(0, 2).map((property) => {
-                        const occupancy = occupancies.find(o => o.property_id === property.id);
-                        return (
-                            <TouchableOpacity key={property.id} style={styles.propCardRow} onPress={() => router.push(`/properties/edit/${property.id}` as any)}>
-                                <View style={styles.propImageContainerRow}>
-                                    <Image source={{ uri: property.images?.[0] || 'https://via.placeholder.com/400' }} style={styles.propImage} />
-                                    <View style={styles.propStatus}><Text style={styles.propStatusText}>{property.status}</Text></View>
+
+                <View style={styles.card}>
+                    {scheduledViewings.length === 0 ? (
+                        <View style={styles.emptyState}>
+                            <Ionicons name="calendar-outline" size={32} color="#e5e7eb" style={{ marginBottom: 8 }} />
+                            <Text style={{ color: '#9ca3af', fontSize: 13, fontWeight: '500' }}>No viewings scheduled for today</Text>
+                        </View>
+                    ) : (
+                        scheduledViewings.map((viewing, idx) => (
+                            <View key={idx} style={[styles.billRow, idx === scheduledViewings.length - 1 && { borderBottomWidth: 0 }]}>
+                                {/* Time Column */}
+                                <View style={{ alignItems: 'center', marginRight: 15, width: 45 }}>
+                                    <Text style={{ fontSize: 16, fontWeight: '900', color: '#111' }}>
+                                        {new Date(viewing.booking_date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}
+                                    </Text>
+                                    <Text style={{ fontSize: 10, color: '#9ca3af', fontWeight: '700', textTransform: 'uppercase' }}>
+                                        {new Date(viewing.booking_date).getHours() < 12 ? 'AM' : 'PM'}
+                                    </Text>
                                 </View>
-                                <View style={styles.propContentRow}>
-                                    <Text style={styles.propTitleRow} numberOfLines={1}>{property.title}</Text>
-                                    <Text style={styles.propAddress} numberOfLines={1}>{property.city}</Text>
-                                    <Text style={styles.propPriceRow}>₱{(property.price || 0).toLocaleString()}</Text>
-                                    <View style={[styles.propStatusBadge, { backgroundColor: occupancy ? '#dcfce7' : '#f3f4f6' }]}>
-                                        <Text style={{ fontSize: 9, fontWeight: 'bold', color: occupancy ? '#166534' : '#666' }}>
-                                            {occupancy ? `${occupancy.tenant?.first_name}` : 'No Tenant'}
-                                        </Text>
+
+                                {/* Info Column */}
+                                <View style={{ flex: 1 }}>
+                                    <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#111' }}>
+                                        {viewing.tenant_profile?.first_name} {viewing.tenant_profile?.last_name}
+                                    </Text>
+                                    <Text style={{ fontSize: 12, color: '#666' }} numberOfLines={1}>{viewing.property?.title}</Text>
+                                </View>
+
+                                {/* Status Icon */}
+                                <View style={{ alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 16, backgroundColor: '#dcfce7' }}>
+                                    <Ionicons name="checkmark" size={16} color="#166534" />
+                                </View>
+                            </View>
+                        ))
+                    )}
+                </View>
+            </View>
+
+            {/* --- OCCUPIED PROPERTIES --- */}
+            <View style={styles.sectionContainer}>
+                <Text style={styles.sectionTitle}>Occupied Properties</Text>
+
+                {occupancies.length === 0 ? (
+                    <View style={[styles.card, styles.emptyState]}>
+                        <Ionicons name="home-outline" size={32} color="#e5e7eb" style={{ marginBottom: 8 }} />
+                        <Text style={{ color: '#9ca3af', fontSize: 13, fontWeight: '500' }}>No properties are currently occupied</Text>
+                    </View>
+                ) : (
+                    occupancies.map((occ: any) => (
+                        <View key={occ.id} style={styles.propCard}>
+                            <View style={{ height: 150, backgroundColor: '#eee', position: 'relative' }}>
+                                <Image
+                                    source={{ uri: occ.property?.images?.[0] || 'https://via.placeholder.com/400' }}
+                                    style={{ width: '100%', height: '100%' }}
+                                    resizeMode="cover"
+                                />
+                                <View style={{ position: 'absolute', top: 12, right: 12, backgroundColor: 'white', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4 }}>
+                                    <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#059669' }}>OCCUPIED</Text>
+                                </View>
+                            </View>
+
+                            <View style={styles.propContent}>
+                                <Text style={styles.propTitle}>{occ.property?.title}</Text>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 12 }}>
+                                    <Ionicons name="location-outline" size={12} color="#9ca3af" />
+                                    <Text style={{ fontSize: 12, color: '#9ca3af' }}>{occ.property?.address || 'No address'}</Text>
+                                </View>
+
+                                <View style={styles.occupantRow}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                                        <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center' }}>
+                                            <Ionicons name="person" size={16} color="#166534" />
+                                        </View>
+                                        <View>
+                                            <Text style={{ fontSize: 9, color: '#166534', fontWeight: 'bold', opacity: 0.8 }}>TENANT</Text>
+                                            <Text style={styles.occupantName}>{occ.tenant?.first_name} {occ.tenant?.last_name}</Text>
+                                        </View>
                                     </View>
+
+                                    <TouchableOpacity onPress={() => openEndContractModal(occ)} style={styles.btnEnd}>
+                                        <Text style={styles.btnEndText}>End Contract</Text>
+                                    </TouchableOpacity>
                                 </View>
-                            </TouchableOpacity>
-                        );
-                    })}
-                </View>
-                {properties.length > 2 && (
-                    <TouchableOpacity
-                        style={styles.viewAllBtn}
-                        onPress={() => router.push('/(tabs)/landlordproperties' as any)}
-                    >
-                        <Text style={styles.viewAllBtnText}>View All My Properties</Text>
-                        <Ionicons name="arrow-forward" size={16} color="white" />
-                    </TouchableOpacity>
-                )}
-                {properties.length <= 2 && properties.length > 0 && (
-                    <TouchableOpacity
-                        style={[styles.viewAllBtn, { backgroundColor: '#f3f4f6' }]}
-                        onPress={() => router.push('/(tabs)/landlordproperties' as any)}
-                    >
-                        <Text style={[styles.viewAllBtnText, { color: '#333' }]}>View All My Properties</Text>
-                        <Ionicons name="arrow-forward" size={16} color="#333" />
-                    </TouchableOpacity>
+                            </View>
+                        </View>
+                    ))
                 )}
             </View>
 
@@ -1018,7 +1128,10 @@ export default function LandlordDashboard({ session, profile }: any) {
                         <Text style={styles.modalTitle}>End Contract</Text>
                         <Text style={{ fontSize: 12, color: '#666', marginBottom: 15 }}>This will mark the property as available.</Text>
                         <Text style={styles.label}>End Date</Text>
-                        <TextInput style={styles.input} value={endContractDate} onChangeText={setEndContractDate} placeholder="YYYY-MM-DD" />
+                        <CalendarPicker
+                            selectedDate={endContractDate}
+                            onDateSelect={setEndContractDate}
+                        />
                         <Text style={styles.label}>Reason</Text>
                         <TextInput style={styles.input} value={endContractReason} onChangeText={setEndContractReason} multiline />
                         <View style={{ flexDirection: 'row', gap: 10, marginTop: 15 }}>

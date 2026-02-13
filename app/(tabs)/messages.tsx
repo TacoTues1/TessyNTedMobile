@@ -191,9 +191,21 @@ export default function Messages() {
         setLoading(false);
     };
 
+    // Mark all messages in a conversation as read for the current user
+    const markAsRead = async (convId: string) => {
+        if (!session?.user?.id) return;
+        await supabase
+            .from('messages')
+            .update({ read: true })
+            .eq('conversation_id', convId)
+            .eq('receiver_id', session.user.id)
+            .eq('read', false);
+    };
+
     useEffect(() => {
         if (selectedConv) {
             loadMessages(selectedConv.id);
+            markAsRead(selectedConv.id);
             const channel = supabase
                 .channel(`chat-${selectedConv.id}`)
                 .on('postgres_changes', {
@@ -202,6 +214,8 @@ export default function Messages() {
                 }, (payload) => {
                     setMessages(prev => [...prev, payload.new]);
                     setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 150);
+                    // Mark incoming message as read since we're viewing the chat
+                    markAsRead(selectedConv.id);
                 })
                 .subscribe();
             return () => { supabase.removeChannel(channel); };
@@ -220,18 +234,37 @@ export default function Messages() {
 
     const sendMessage = async (fileUrl?: string, fileType?: string, fileName?: string) => {
         if (!text.trim() && !fileUrl) return;
+        if (!selectedConv?.id || !session?.user?.id) {
+            Alert.alert('Error', 'No conversation or session found.');
+            return;
+        }
         setSending(true);
-        const msg: any = {
-            conversation_id: selectedConv.id,
-            sender_id: session.user.id,
-            content: text.trim(),
-            type: fileUrl ? (fileType || 'image') : 'text',
-            file_url: fileUrl || null,
-        };
-        if (fileName) msg.file_name = fileName;
-        setText('');
-        await supabase.from('messages').insert(msg);
-        await supabase.from('conversations').update({ updated_at: new Date().toISOString() }).eq('id', selectedConv.id);
+        try {
+            const otherId = selectedConv.otherUser?.id || null;
+            const msg: any = {
+                conversation_id: selectedConv.id,
+                sender_id: session.user.id,
+                receiver_id: otherId,
+                message: text.trim() || '',
+                file_url: fileUrl || null,
+                file_type: fileUrl ? (fileType || 'image') : null,
+            };
+            if (fileName) msg.file_name = fileName;
+            const currentText = text;
+            setText('');
+            const { error } = await supabase.from('messages').insert(msg);
+            if (error) {
+                console.error('Send message error:', error);
+                setText(currentText); // Restore text on failure
+                Alert.alert('Send Failed', error.message || 'Could not send message.');
+                setSending(false);
+                return;
+            }
+            await supabase.from('conversations').update({ updated_at: new Date().toISOString() }).eq('id', selectedConv.id);
+        } catch (err: any) {
+            console.error('Send message exception:', err);
+            Alert.alert('Error', 'Something went wrong sending the message.');
+        }
         setSending(false);
     };
 
@@ -319,7 +352,7 @@ export default function Messages() {
             .from('messages')
             .select('*')
             .eq('conversation_id', convId)
-            .in('type', ['image', 'file'])
+            .not('file_url', 'is', null)
             .order('created_at', { ascending: false });
         setSharedMedia(data || []);
         setShowFilesPanel(true);
@@ -340,9 +373,9 @@ export default function Messages() {
     const getMessagePreview = (conv: any) => {
         if (!conv.lastMessage) return 'Start a conversation';
         const msg = conv.lastMessage;
-        if (msg.type === 'image') return '📷 Photo';
-        if (msg.type === 'file') return `📎 ${msg.file_name || 'File'}`;
-        return msg.content || '';
+        if (msg.file_url && msg.file_type?.startsWith('image')) return '📷 Photo';
+        if (msg.file_url) return `📎 ${msg.file_name || 'File'}`;
+        return msg.message || '';
     };
 
     const renderAvatar = (user: any, size: number = 48) => {
@@ -423,14 +456,14 @@ export default function Messages() {
                                         </View>
                                     )}
                                     <View style={[styles.msgBubble, isMe ? styles.msgMe : styles.msgOther]}>
-                                        {item.type === 'image' ? (
+                                        {item.file_url && item.file_type?.startsWith('image') ? (
                                             <TouchableOpacity onPress={() => downloadFile(item.file_url, 'photo.jpg')}>
                                                 <Image source={{ uri: item.file_url }} style={styles.msgImage} />
                                                 <View style={styles.downloadOverlay}>
                                                     <Ionicons name="download-outline" size={16} color="white" />
                                                 </View>
                                             </TouchableOpacity>
-                                        ) : item.type === 'file' ? (
+                                        ) : item.file_url ? (
                                             <TouchableOpacity onPress={() => downloadFile(item.file_url, item.file_name)} style={styles.fileMsg}>
                                                 <View style={styles.fileIconBox}>
                                                     <Ionicons name="document-outline" size={22} color="#6366f1" />
@@ -444,7 +477,7 @@ export default function Messages() {
                                                 <Ionicons name="download-outline" size={18} color={isMe ? 'rgba(255,255,255,0.7)' : '#6366f1'} />
                                             </TouchableOpacity>
                                         ) : (
-                                            <Text style={[styles.msgText, isMe ? styles.textMe : styles.textOther]}>{item.content}</Text>
+                                            <Text style={[styles.msgText, isMe ? styles.textMe : styles.textOther]}>{item.message}</Text>
                                         )}
                                         <Text style={[styles.msgTime, isMe ? styles.timeMe : styles.timeOther]}>
                                             {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -457,7 +490,7 @@ export default function Messages() {
                 />
 
                 {/* Input Bar */}
-                <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+                <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}>
                     <View style={styles.inputBar}>
                         <TouchableOpacity onPress={pickFile} style={styles.inputAction}>
                             <Ionicons name="attach-outline" size={22} color="#9ca3af" />
@@ -515,7 +548,7 @@ export default function Messages() {
                                         onPress={() => downloadFile(item.file_url, item.file_name)}
                                         style={styles.sharedFileItem}
                                     >
-                                        {item.type === 'image' ? (
+                                        {item.file_type?.startsWith('image') ? (
                                             <Image source={{ uri: item.file_url }} style={styles.sharedFileThumb} />
                                         ) : (
                                             <View style={[styles.sharedFileThumb, styles.sharedFileIcon]}>
@@ -524,7 +557,7 @@ export default function Messages() {
                                         )}
                                         <View style={{ flex: 1 }}>
                                             <Text style={styles.sharedFileName} numberOfLines={1}>
-                                                {item.type === 'image' ? 'Photo' : (item.file_name || 'File')}
+                                                {item.file_type?.startsWith('image') ? 'Photo' : (item.file_name || 'File')}
                                             </Text>
                                             <Text style={styles.sharedFileDate}>
                                                 {new Date(item.created_at).toLocaleDateString()}

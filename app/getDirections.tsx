@@ -1,12 +1,17 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  View, Text, StyleSheet, TextInput, TouchableOpacity, 
-  ActivityIndicator, Alert, Dimensions, Platform, ScrollView, Animated
-} from 'react-native';
-import MapView, { Marker, Polyline, UrlTile, Circle, PROVIDER_DEFAULT } from 'react-native-maps';
-import * as Location from 'expo-location';
-import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator, Alert,
+  Animated,
+  Dimensions, Platform, ScrollView,
+  StyleSheet,
+  Text,
+  TextInput, TouchableOpacity,
+  View
+} from 'react-native';
+import MapView, { Marker, Polyline, PROVIDER_DEFAULT, UrlTile } from 'react-native-maps';
 
 const { width, height } = Dimensions.get('window');
 
@@ -14,10 +19,10 @@ export default function GetDirections() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const mapRef = useRef<MapView>(null);
-  
+
   const searchTimeout = useRef<any>(null);
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
-  
+
   // Animation for user marker ping
   const pingAnim = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0.8)).current;
@@ -25,12 +30,12 @@ export default function GetDirections() {
   // State
   const [fromAddress, setFromAddress] = useState('');
   const [toAddress, setToAddress] = useState('');
-  const [userLocation, setUserLocation] = useState<{latitude: number, longitude: number, heading?: number} | null>(null);
-  const [destLocation, setDestLocation] = useState<{latitude: number, longitude: number} | null>(null);
+  const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number, heading?: number } | null>(null);
+  const [destLocation, setDestLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   const [isNavigating, setIsNavigating] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [panelVisible, setPanelVisible] = useState(true);
-  
+
   // Autocomplete
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -49,7 +54,7 @@ export default function GetDirections() {
         setStatusMsg('Permission to access location was denied');
         return;
       }
-      
+
       // Handle Auto-Start Params
       if (params.to) {
         setToAddress(params.to as string);
@@ -59,6 +64,13 @@ export default function GetDirections() {
           setDestLocation({ latitude: dLat, longitude: dLng });
         } else {
           geocodeAddress(params.to as string, 'dest');
+        }
+      }
+
+      if (params.from) {
+        setFromAddress(params.from as string);
+        if (params.from !== 'My Location') {
+          geocodeAddress(params.from as string, 'from');
         }
       }
 
@@ -95,13 +107,13 @@ export default function GetDirections() {
         const lat = parseFloat(data[0].lat);
         const lng = parseFloat(data[0].lon);
         const loc = { latitude: lat, longitude: lng };
-        
+
         if (type === 'dest') {
-            setDestLocation(loc);
-            mapRef.current?.animateToRegion({ ...loc, latitudeDelta: 0.01, longitudeDelta: 0.01 });
+          setDestLocation(loc);
+          mapRef.current?.animateToRegion({ ...loc, latitudeDelta: 0.01, longitudeDelta: 0.01 });
         } else {
-            setUserLocation(loc);
-            mapRef.current?.animateToRegion({ ...loc, latitudeDelta: 0.01, longitudeDelta: 0.01 });
+          setUserLocation(loc);
+          mapRef.current?.animateToRegion({ ...loc, latitudeDelta: 0.01, longitudeDelta: 0.01 });
         }
         setStatusMsg('');
       } else {
@@ -116,7 +128,7 @@ export default function GetDirections() {
   const handleAddressChange = (text: string) => {
     setFromAddress(text);
     if (searchTimeout.current) clearTimeout(searchTimeout.current);
-    
+
     if (text.length > 2) {
       searchTimeout.current = setTimeout(async () => {
         try {
@@ -139,11 +151,11 @@ export default function GetDirections() {
     setUserLocation({ latitude: lat, longitude: lng });
     setShowSuggestions(false);
     setSuggestions([]);
-    
+
     mapRef.current?.animateToRegion({ latitude: lat, longitude: lng, latitudeDelta: 0.01, longitudeDelta: 0.01 });
 
     if (destLocation) {
-        calculateAllRoutes({ latitude: lat, longitude: lng }, destLocation);
+      calculateAllRoutes({ latitude: lat, longitude: lng }, destLocation);
     }
   };
 
@@ -151,19 +163,19 @@ export default function GetDirections() {
   const handleShowMyLocation = async () => {
     setStatusMsg('Locating...');
     try {
-        const location = await Location.getCurrentPositionAsync({});
-        const { latitude, longitude, heading } = location.coords;
-        setUserLocation({ latitude, longitude, heading: heading || 0 });
-        setFromAddress("My Location");
-        setStatusMsg('');
-        
-        mapRef.current?.animateToRegion({ latitude, longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 });
+      const location = await Location.getCurrentPositionAsync({});
+      const { latitude, longitude, heading } = location.coords;
+      setUserLocation({ latitude, longitude, heading: heading || 0 });
+      setFromAddress("My Location");
+      setStatusMsg('');
 
-        if (destLocation) {
-            calculateAllRoutes({ latitude, longitude }, destLocation);
-        }
+      mapRef.current?.animateToRegion({ latitude, longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 });
+
+      if (destLocation) {
+        calculateAllRoutes({ latitude, longitude }, destLocation);
+      }
     } catch (e) {
-        setStatusMsg('Could not get location');
+      setStatusMsg('Could not get location');
     }
   };
 
@@ -191,28 +203,28 @@ export default function GetDirections() {
 
     setRoutesData({ driving, bike, foot });
     setStatusMsg('');
-    
+
     const initialMode = driving.length > 0 ? 'driving' : bike.length > 0 ? 'bike' : 'foot';
     setSelectedMode(initialMode as any);
     setSelectedRouteIndex(0);
-    
+
     fitToRoute(initialMode as any, 0, driving, bike, foot);
   };
 
   const fitToRoute = (mode: string, index: number, d: any[], b: any[], f: any[]) => {
-      let routes: any[] = [];
-      if(mode === 'driving') routes = d;
-      else if(mode === 'bike') routes = b;
-      else routes = f;
+    let routes: any[] = [];
+    if (mode === 'driving') routes = d;
+    else if (mode === 'bike') routes = b;
+    else routes = f;
 
-      if(routes.length > index) {
-          const route = routes[index];
-          const coords = route.geometry.coordinates.map((c: any) => ({ latitude: c[1], longitude: c[0] }));
-          mapRef.current?.fitToCoordinates(coords, {
-              edgePadding: { top: 50, right: 50, bottom: 350, left: 50 },
-              animated: true
-          });
-      }
+    if (routes.length > index) {
+      const route = routes[index];
+      const coords = route.geometry.coordinates.map((c: any) => ({ latitude: c[1], longitude: c[0] }));
+      mapRef.current?.fitToCoordinates(coords, {
+        edgePadding: { top: 50, right: 50, bottom: 350, left: 50 },
+        animated: true
+      });
+    }
   }
 
   const handleModeClick = (mode: 'driving' | 'bike' | 'foot') => {
@@ -223,56 +235,56 @@ export default function GetDirections() {
   // 6. Live Navigation
   const toggleNavigation = async () => {
     if (isNavigating) {
-        // STOP
-        setIsNavigating(false);
-        if (locationSubscription.current) {
-            locationSubscription.current.remove();
-            locationSubscription.current = null;
-        }
-        setStatusMsg('Navigation Stopped');
-        
-        // Zoom out to route
-        const currentRoutes = routesData[selectedMode];
-        if (currentRoutes.length > selectedRouteIndex) {
-             const route = currentRoutes[selectedRouteIndex];
-             const coords = (route as any).geometry.coordinates.map((c: any) => ({ latitude: c[1], longitude: c[0] }));
-             mapRef.current?.fitToCoordinates(coords, { edgePadding: { top: 50, right: 50, bottom: 350, left: 50 }, animated: true });
-        }
+      // STOP
+      setIsNavigating(false);
+      if (locationSubscription.current) {
+        locationSubscription.current.remove();
+        locationSubscription.current = null;
+      }
+      setStatusMsg('Navigation Stopped');
+
+      // Zoom out to route
+      const currentRoutes = routesData[selectedMode];
+      if (currentRoutes.length > selectedRouteIndex) {
+        const route = currentRoutes[selectedRouteIndex];
+        const coords = (route as any).geometry.coordinates.map((c: any) => ({ latitude: c[1], longitude: c[0] }));
+        mapRef.current?.fitToCoordinates(coords, { edgePadding: { top: 50, right: 50, bottom: 350, left: 50 }, animated: true });
+      }
 
     } else {
-        // START
-        if (!userLocation) {
-            Alert.alert("Location Needed", "Please locate yourself first.");
-            handleShowMyLocation();
-            return;
+      // START
+      if (!userLocation) {
+        Alert.alert("Location Needed", "Please locate yourself first.");
+        handleShowMyLocation();
+        return;
+      }
+
+      setIsNavigating(true);
+      setStatusMsg('Live Navigation Active');
+
+      // Initial Zoom to User
+      mapRef.current?.animateToRegion({
+        latitude: userLocation.latitude,
+        longitude: userLocation.longitude,
+        latitudeDelta: 0.002,
+        longitudeDelta: 0.002
+      }, 1000);
+
+      locationSubscription.current = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 2000, distanceInterval: 5 },
+        (loc) => {
+          const { latitude, longitude, heading } = loc.coords;
+          setUserLocation({ latitude, longitude, heading: heading || 0 });
+
+          // Keep centering map on user, slightly offset to bottom
+          mapRef.current?.animateCamera({
+            center: { latitude, longitude },
+            pitch: 45,
+            heading: heading || 0,
+            zoom: 18
+          }, { duration: 1000 });
         }
-
-        setIsNavigating(true);
-        setStatusMsg('Live Navigation Active');
-        
-        // Initial Zoom to User
-        mapRef.current?.animateToRegion({
-            latitude: userLocation.latitude, 
-            longitude: userLocation.longitude, 
-            latitudeDelta: 0.002, 
-            longitudeDelta: 0.002
-        }, 1000);
-
-        locationSubscription.current = await Location.watchPositionAsync(
-            { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 2000, distanceInterval: 5 },
-            (loc) => {
-                const { latitude, longitude, heading } = loc.coords;
-                setUserLocation({ latitude, longitude, heading: heading || 0 });
-                
-                // Keep centering map on user, slightly offset to bottom
-                mapRef.current?.animateCamera({
-                    center: { latitude, longitude },
-                    pitch: 45,
-                    heading: heading || 0,
-                    zoom: 18
-                }, { duration: 1000 });
-            }
-        );
+      );
     }
   };
 
@@ -289,16 +301,16 @@ export default function GetDirections() {
     if (routes && routes.length > 0) return formatDuration((routes[0] as any).duration);
     return '--';
   };
-  
+
   const getCount = (mode: string) => {
-     const routes = routesData[mode as keyof typeof routesData];
-     return routes ? routes.length : 0;
+    const routes = routesData[mode as keyof typeof routesData];
+    return routes ? routes.length : 0;
   };
 
   // Helper to parse OSRM coordinates for Polyline
   const getPolylineCoords = (route: any) => {
-      if (!route) return [];
-      return route.geometry.coordinates.map((c: any) => ({ latitude: c[1], longitude: c[0] }));
+    if (!route) return [];
+    return route.geometry.coordinates.map((c: any) => ({ latitude: c[1], longitude: c[0] }));
   };
 
   return (
@@ -309,204 +321,204 @@ export default function GetDirections() {
         provider={PROVIDER_DEFAULT}
         style={StyleSheet.absoluteFillObject}
         initialRegion={{
-            latitude: 10.3157, longitude: 123.8854, latitudeDelta: 0.0922, longitudeDelta: 0.0421
+          latitude: 10.3157, longitude: 123.8854, latitudeDelta: 0.0922, longitudeDelta: 0.0421
         }}
         mapType={Platform.OS === 'android' ? 'none' : 'standard'}
         rotateEnabled={true}
         pitchEnabled={true}
       >
         <UrlTile urlTemplate="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" maximumZ={19} zIndex={-1} />
-        
+
         {/* User Marker with Animation */}
         {userLocation && (
-            <Marker coordinate={userLocation} anchor={{ x: 0.5, y: 0.5 }}>
-               <View style={styles.userMarkerContainer}>
-                  {/* Animated Ping Circle */}
-                  <Animated.View style={[styles.pingCircle, { transform: [{ scale: pingAnim }], opacity: fadeAnim }]} />
-                  {/* Outer White Border */}
-                  <View style={styles.userMarkerOuter}>
-                      {/* Directional Arrow or Dot */}
-                      <View style={[styles.userMarkerInner, { transform: [{ rotate: `${userLocation.heading || 0}deg` }] }]}>
-                         {/* Triangle for direction */}
-                         <View style={styles.directionArrow} />
-                      </View>
-                  </View>
-               </View>
-            </Marker>
+          <Marker coordinate={userLocation} anchor={{ x: 0.5, y: 0.5 }}>
+            <View style={styles.userMarkerContainer}>
+              {/* Animated Ping Circle */}
+              <Animated.View style={[styles.pingCircle, { transform: [{ scale: pingAnim }], opacity: fadeAnim }]} />
+              {/* Outer White Border */}
+              <View style={styles.userMarkerOuter}>
+                {/* Directional Arrow or Dot */}
+                <View style={[styles.userMarkerInner, { transform: [{ rotate: `${userLocation.heading || 0}deg` }] }]}>
+                  {/* Triangle for direction */}
+                  <View style={styles.directionArrow} />
+                </View>
+              </View>
+            </View>
+          </Marker>
         )}
 
         {/* Destination Marker */}
         {destLocation && (
-             <Marker coordinate={destLocation} title="Destination" pinColor="red" />
+          <Marker coordinate={destLocation} title="Destination" pinColor="red" />
         )}
 
         {/* Render Alternate Routes (Gray) */}
         {routesData[selectedMode].map((route: any, index: number) => {
-            if (index === selectedRouteIndex) return null; // Skip selected
-            return (
-                <Polyline 
-                    key={`alt-${index}`}
-                    coordinates={getPolylineCoords(route)}
-                    strokeWidth={5}
-                    strokeColor="#9ca3af" // Gray
-                    tappable={true}
-                    onPress={() => setSelectedRouteIndex(index)}
-                />
-            );
+          if (index === selectedRouteIndex) return null; // Skip selected
+          return (
+            <Polyline
+              key={`alt-${index}`}
+              coordinates={getPolylineCoords(route)}
+              strokeWidth={5}
+              strokeColor="#9ca3af" // Gray
+              tappable={true}
+              onPress={() => setSelectedRouteIndex(index)}
+            />
+          );
         })}
 
         {/* Render Selected Route (Colored) */}
         {routesData[selectedMode].length > selectedRouteIndex && (
-             <Polyline 
-                coordinates={getPolylineCoords(routesData[selectedMode][selectedRouteIndex])}
-                strokeWidth={7}
-                strokeColor={selectedMode === 'bike' ? '#7c3aed' : selectedMode === 'foot' ? '#059669' : '#111827'} // Black/Purple/Green
-                zIndex={10}
-             />
+          <Polyline
+            coordinates={getPolylineCoords(routesData[selectedMode][selectedRouteIndex])}
+            strokeWidth={7}
+            strokeColor={selectedMode === 'bike' ? '#7c3aed' : selectedMode === 'foot' ? '#059669' : '#111827'} // Black/Purple/Green
+            zIndex={10}
+          />
         )}
       </MapView>
 
       {/* 2. Back Button */}
       <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-         <Ionicons name="arrow-back" size={20} color="black" />
-         <Text style={styles.backText}>Back</Text>
+        <Ionicons name="arrow-back" size={20} color="black" />
+        <Text style={styles.backText}>Back</Text>
       </TouchableOpacity>
 
       {/* 3. Floating Bottom Panel */}
       <View style={styles.bottomContainer}>
-         
-         {/* Toggle Button */}
-         <TouchableOpacity onPress={() => setPanelVisible(!panelVisible)} style={styles.toggleBtn}>
-             <Ionicons name={panelVisible ? "chevron-down" : "chevron-up"} size={20} color="#4b5563" />
-         </TouchableOpacity>
 
-         {panelVisible && (
-             <View style={styles.card}>
-                {/* Status Bar */}
-                {isNavigating && (
-                    <View style={styles.statusBar}>
-                        <View style={styles.pulseDot} />
-                        <Text style={styles.statusText}>Live Navigation Active</Text>
-                    </View>
-                )}
+        {/* Toggle Button */}
+        <TouchableOpacity onPress={() => setPanelVisible(!panelVisible)} style={styles.toggleBtn}>
+          <Ionicons name={panelVisible ? "chevron-down" : "chevron-up"} size={20} color="#4b5563" />
+        </TouchableOpacity>
 
-                {/* Inputs */}
-                <View style={styles.inputStack}>
-                    {/* From Input */}
-                    <View style={styles.inputRow}>
-                       <View style={[styles.dot, {backgroundColor: '#3b82f6'}]} />
-                       <TextInput 
-                          style={styles.input} 
-                          placeholder="Your Location" 
-                          value={fromAddress} 
-                          onChangeText={handleAddressChange}
-                       />
-                       <TouchableOpacity onPress={handleShowMyLocation} style={styles.locateBtn}>
-                          <Ionicons name="locate" size={20} color="#2563eb" />
-                       </TouchableOpacity>
-                       
-                       {/* Suggestions Dropdown */}
-                       {showSuggestions && suggestions.length > 0 && (
-                           <View style={styles.suggestionsBox}>
-                              <ScrollView keyboardShouldPersistTaps="handled">
-                                 {suggestions.map((item, index) => (
-                                     <TouchableOpacity key={index} style={styles.suggestionItem} onPress={() => selectSuggestion(item)}>
-                                         <Text numberOfLines={1} style={styles.suggestionText}>{item.display_name}</Text>
-                                     </TouchableOpacity>
-                                 ))}
-                              </ScrollView>
-                           </View>
-                       )}
-                    </View>
+        {panelVisible && (
+          <View style={styles.card}>
+            {/* Status Bar */}
+            {isNavigating && (
+              <View style={styles.statusBar}>
+                <View style={styles.pulseDot} />
+                <Text style={styles.statusText}>Live Navigation Active</Text>
+              </View>
+            )}
 
-                    <View style={styles.connectorLine} />
+            {/* Inputs */}
+            <View style={styles.inputStack}>
+              {/* From Input */}
+              <View style={styles.inputRow}>
+                <View style={[styles.dot, { backgroundColor: '#3b82f6' }]} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Your Location"
+                  value={fromAddress}
+                  onChangeText={handleAddressChange}
+                />
+                <TouchableOpacity onPress={handleShowMyLocation} style={styles.locateBtn}>
+                  <Ionicons name="locate" size={20} color="#2563eb" />
+                </TouchableOpacity>
 
-                    {/* To Input */}
-                    <View style={styles.inputRow}>
-                       <View style={[styles.dot, {backgroundColor: '#ef4444'}]} />
-                       <TextInput 
-                          style={[styles.input, {color: '#6b7280'}]} 
-                          placeholder="Destination" 
-                          value={toAddress || "Property Location"} 
-                          editable={false} 
-                       />
-                    </View>
-                </View>
-
-                {/* Route Info & Controls */}
-                {(routesData.driving.length > 0 || routesData.bike.length > 0 || routesData.foot.length > 0) ? (
-                    <View style={styles.grid}>
-                        
-                        {/* Mode Buttons */}
-                        {[
-                            { mode: 'driving', label: 'Car', icon: 'car-sport', color: 'black' },
-                            { mode: 'bike', label: 'Bike', icon: 'bicycle', color: '#7c3aed' },
-                            { mode: 'foot', label: 'Walk', icon: 'walk', color: '#059669' }
-                        ].map((item: any) => (
-                            <TouchableOpacity 
-                               key={item.mode}
-                               style={[styles.modeBtn, selectedMode === item.mode && {borderColor: item.color, backgroundColor: item.mode === 'driving' ? 'black' : item.color }]}
-                               onPress={() => handleModeClick(item.mode)}
-                            >
-                               <Ionicons name={item.icon} size={24} color={selectedMode === item.mode ? 'white' : '#9ca3af'} />
-                               <Text style={[styles.modeLabel, selectedMode === item.mode && {color: 'white'}]}>
-                                  {item.label} ({getCount(item.mode)})
-                               </Text>
-                               <Text style={[styles.durationLabel, selectedMode === item.mode && {color: 'white'}]}>
-                                  {getDuration(item.mode)}
-                               </Text>
-                            </TouchableOpacity>
-                        ))}
-
-                        {/* Start/Stop Navigation Button */}
-                        <TouchableOpacity 
-                            style={[styles.navBtn, isNavigating ? {backgroundColor: '#dc2626'} : {backgroundColor: '#2563eb'}]}
-                            onPress={toggleNavigation}
-                        >
-                            <Ionicons name={isNavigating ? "stop-circle-outline" : "navigate-circle-outline"} size={24} color="white" />
-                            <Text style={styles.navBtnLabel}>{isNavigating ? 'STOP' : 'START'}</Text>
-                            <Text style={styles.navBtnSub}>NAV</Text>
+                {/* Suggestions Dropdown */}
+                {showSuggestions && suggestions.length > 0 && (
+                  <View style={styles.suggestionsBox}>
+                    <ScrollView keyboardShouldPersistTaps="handled">
+                      {suggestions.map((item, index) => (
+                        <TouchableOpacity key={index} style={styles.suggestionItem} onPress={() => selectSuggestion(item)}>
+                          <Text numberOfLines={1} style={styles.suggestionText}>{item.display_name}</Text>
                         </TouchableOpacity>
-
-                    </View>
-                ) : (
-                    <View style={styles.emptyState}>
-                       {statusMsg ? (
-                           <View style={{flexDirection:'row', alignItems:'center', gap: 10}}>
-                               <ActivityIndicator size="small" color="#2563eb" />
-                               <Text style={styles.emptyText}>{statusMsg}</Text>
-                           </View>
-                       ) : (
-                           <Text style={styles.emptyText}>Tap location button to start</Text>
-                       )}
-                    </View>
-                )}
-
-                {/* Route Selection Tabs (if multiple) */}
-                {!isNavigating && routesData[selectedMode].length > 1 && (
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.altRoutesContainer}>
-                        {routesData[selectedMode].map((route: any, idx: number) => {
-                            const isSelected = selectedRouteIndex === idx;
-                            return (
-                                <TouchableOpacity 
-                                    key={idx} 
-                                    onPress={() => setSelectedRouteIndex(idx)}
-                                    style={[styles.altRouteBtn, isSelected && styles.altRouteBtnActive]}
-                                >
-                                    <Text style={[styles.altRouteTitle, isSelected && {color:'black'}]}>
-                                        {idx === 0 ? 'Fastest' : `Route ${idx+1}`}
-                                    </Text>
-                                    <Text style={styles.altRouteDetail}>
-                                        {formatDuration(route.duration)} • {(route.distance/1000).toFixed(1)} km
-                                    </Text>
-                                </TouchableOpacity>
-                            )
-                        })}
+                      ))}
                     </ScrollView>
+                  </View>
                 )}
+              </View>
 
-             </View>
-         )}
+              <View style={styles.connectorLine} />
+
+              {/* To Input */}
+              <View style={styles.inputRow}>
+                <View style={[styles.dot, { backgroundColor: '#ef4444' }]} />
+                <TextInput
+                  style={[styles.input, { color: '#6b7280' }]}
+                  placeholder="Destination"
+                  value={toAddress || "Property Location"}
+                  editable={false}
+                />
+              </View>
+            </View>
+
+            {/* Route Info & Controls */}
+            {(routesData.driving.length > 0 || routesData.bike.length > 0 || routesData.foot.length > 0) ? (
+              <View style={styles.grid}>
+
+                {/* Mode Buttons */}
+                {[
+                  { mode: 'driving', label: 'Car', icon: 'car-sport', color: 'black' },
+                  { mode: 'bike', label: 'Bike', icon: 'bicycle', color: '#7c3aed' },
+                  { mode: 'foot', label: 'Walk', icon: 'walk', color: '#059669' }
+                ].map((item: any) => (
+                  <TouchableOpacity
+                    key={item.mode}
+                    style={[styles.modeBtn, selectedMode === item.mode && { borderColor: item.color, backgroundColor: item.mode === 'driving' ? 'black' : item.color }]}
+                    onPress={() => handleModeClick(item.mode)}
+                  >
+                    <Ionicons name={item.icon} size={24} color={selectedMode === item.mode ? 'white' : '#9ca3af'} />
+                    <Text style={[styles.modeLabel, selectedMode === item.mode && { color: 'white' }]}>
+                      {item.label} ({getCount(item.mode)})
+                    </Text>
+                    <Text style={[styles.durationLabel, selectedMode === item.mode && { color: 'white' }]}>
+                      {getDuration(item.mode)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+
+                {/* Start/Stop Navigation Button */}
+                <TouchableOpacity
+                  style={[styles.navBtn, isNavigating ? { backgroundColor: '#dc2626' } : { backgroundColor: '#2563eb' }]}
+                  onPress={toggleNavigation}
+                >
+                  <Ionicons name={isNavigating ? "stop-circle-outline" : "navigate-circle-outline"} size={24} color="white" />
+                  <Text style={styles.navBtnLabel}>{isNavigating ? 'STOP' : 'START'}</Text>
+                  <Text style={styles.navBtnSub}>NAV</Text>
+                </TouchableOpacity>
+
+              </View>
+            ) : (
+              <View style={styles.emptyState}>
+                {statusMsg ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <ActivityIndicator size="small" color="#2563eb" />
+                    <Text style={styles.emptyText}>{statusMsg}</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.emptyText}>Tap location button to start</Text>
+                )}
+              </View>
+            )}
+
+            {/* Route Selection Tabs (if multiple) */}
+            {!isNavigating && routesData[selectedMode].length > 1 && (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.altRoutesContainer}>
+                {routesData[selectedMode].map((route: any, idx: number) => {
+                  const isSelected = selectedRouteIndex === idx;
+                  return (
+                    <TouchableOpacity
+                      key={idx}
+                      onPress={() => setSelectedRouteIndex(idx)}
+                      style={[styles.altRouteBtn, isSelected && styles.altRouteBtnActive]}
+                    >
+                      <Text style={[styles.altRouteTitle, isSelected && { color: 'black' }]}>
+                        {idx === 0 ? 'Fastest' : `Route ${idx + 1}`}
+                      </Text>
+                      <Text style={styles.altRouteDetail}>
+                        {formatDuration(route.duration)} • {(route.distance / 1000).toFixed(1)} km
+                      </Text>
+                    </TouchableOpacity>
+                  )
+                })}
+              </ScrollView>
+            )}
+
+          </View>
+        )}
       </View>
     </View>
   );
@@ -518,16 +530,16 @@ const styles = StyleSheet.create({
     position: 'absolute', top: 50, left: 20, zIndex: 10,
     backgroundColor: 'white', paddingHorizontal: 15, paddingVertical: 10,
     borderRadius: 12, flexDirection: 'row', alignItems: 'center',
-    shadowColor: '#000', shadowOffset: {width:0, height:2}, shadowOpacity:0.1, shadowRadius:4, elevation:4
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 4
   },
   backText: { fontWeight: 'bold', marginLeft: 5 },
-  
+
   // Custom User Marker
   userMarkerContainer: { width: 60, height: 60, alignItems: 'center', justifyContent: 'center' },
   pingCircle: { position: 'absolute', width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(59, 130, 246, 0.3)' },
   userMarkerOuter: { width: 24, height: 24, backgroundColor: 'white', borderRadius: 12, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, elevation: 5 },
   userMarkerInner: { width: 18, height: 18, backgroundColor: '#2563eb', borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
-  directionArrow: { width: 0, height: 0, backgroundColor: 'transparent', borderStyle: 'solid', borderLeftWidth: 4, borderRightWidth: 4, borderBottomWidth: 8, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: 'white', transform: [{translateY: -1}] },
+  directionArrow: { width: 0, height: 0, backgroundColor: 'transparent', borderStyle: 'solid', borderLeftWidth: 4, borderRightWidth: 4, borderBottomWidth: 8, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: 'white', transform: [{ translateY: -1 }] },
 
   // Bottom Panel
   bottomContainer: {
@@ -537,9 +549,9 @@ const styles = StyleSheet.create({
   card: {
     width: '100%', maxWidth: 450, backgroundColor: 'rgba(255,255,255,0.98)',
     borderRadius: 24, padding: 20,
-    shadowColor: '#000', shadowOffset: {width:0, height:4}, shadowOpacity:0.2, shadowRadius:10, elevation:10
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 10, elevation: 10
   },
-  
+
   statusBar: { backgroundColor: '#eff6ff', padding: 8, borderRadius: 8, marginBottom: 15, borderWidth: 1, borderColor: '#dbeafe', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   pulseDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#2563eb' },
   statusText: { color: '#1d4ed8', fontSize: 12, fontWeight: 'bold', textTransform: 'uppercase' },
@@ -554,7 +566,7 @@ const styles = StyleSheet.create({
   suggestionsBox: {
     position: 'absolute', top: 50, left: 0, right: 0,
     backgroundColor: 'white', borderRadius: 12, padding: 5,
-    shadowColor: '#000', shadowOffset: {width:0,height:2}, shadowOpacity:0.2, shadowRadius:5, elevation:10,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 5, elevation: 10,
     maxHeight: 200, zIndex: 100
   },
   suggestionItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
@@ -564,7 +576,7 @@ const styles = StyleSheet.create({
   modeBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 16, borderWidth: 1, borderColor: '#e5e7eb', backgroundColor: 'white' },
   modeLabel: { fontSize: 10, fontWeight: '800', textTransform: 'uppercase', marginTop: 4, color: '#9ca3af' },
   durationLabel: { fontSize: 11, fontWeight: 'bold', marginTop: 2, color: '#4b5563' },
-  
+
   navBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 10, borderRadius: 16, shadowColor: '#000', shadowOpacity: 0.2, elevation: 3 },
   navBtnLabel: { color: 'white', fontSize: 12, fontWeight: '900', marginTop: 2 },
   navBtnSub: { color: 'rgba(255,255,255,0.8)', fontSize: 10, fontWeight: 'bold' },

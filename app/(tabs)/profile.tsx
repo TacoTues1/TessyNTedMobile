@@ -22,7 +22,7 @@ import { supabase } from '../../lib/supabase';
 // ---------------------------------------------------------------------------
 // ⚠️ REPLACE THIS WITH YOUR COMPUTER'S LOCAL IP ADDRESS
 // ---------------------------------------------------------------------------
-const API_URL = 'http://192.168.1.5:3000';
+const API_URL = process.env.EXPO_PUBLIC_API_URL || '';
 
 export default function Profile() {
   const router = useRouter();

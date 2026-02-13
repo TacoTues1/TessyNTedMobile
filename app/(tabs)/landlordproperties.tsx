@@ -153,18 +153,7 @@ export default function LandlordProperties() {
                             <Ionicons name="eye-outline" size={14} color="#111" />
                             <Text style={styles.actionBtnText}>View</Text>
                         </TouchableOpacity>
-                        {item.status === 'available' && (
-                            <TouchableOpacity
-                                style={[styles.actionBtn, styles.actionBtnPrimary]}
-                                onPress={(e) => {
-                                    e.stopPropagation();
-                                    router.push({ pathname: '/(tabs)/assigntenant', params: { propertyId: item.id } } as any);
-                                }}
-                            >
-                                <Ionicons name="person-add-outline" size={14} color="white" />
-                                <Text style={styles.actionBtnTextPrimary}>Assign Tenant</Text>
-                            </TouchableOpacity>
-                        )}
+
                     </View>
                 </View>
             </TouchableOpacity>
