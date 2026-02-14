@@ -211,12 +211,10 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="messages"
+        name="allproperties"
         options={{
-          title: 'Messages',
-          tabBarIcon: ({ color, focused }) => (
-            <MessagesTabIcon color={color} focused={focused} />
-          ),
+          title: 'Properties',
+          tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "business" : "business-outline"} size={22} color={color} />
         }}
       />
       <Tabs.Screen
@@ -231,7 +229,12 @@ export default function TabLayout() {
               backgroundColor: '#000',
               justifyContent: 'center',
               alignItems: 'center',
-              marginTop: 10
+              marginTop: 10,
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.3,
+              shadowRadius: 4.65,
+              elevation: 8,
             }}>
               <Ionicons name="add" size={24} color="white" />
             </View>
@@ -239,11 +242,11 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="notifications"
+        name="messages"
         options={{
-          title: 'Notifications',
+          title: 'Messages',
           tabBarIcon: ({ color, focused }) => (
-            <NotificationsTabIcon color={color} focused={focused} />
+            <MessagesTabIcon color={color} focused={focused} />
           ),
         }}
       />
@@ -254,13 +257,15 @@ export default function TabLayout() {
           tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "person" : "person-outline"} size={22} color={color} />
         }}
       />
+
+      {/* Hidden Screens */}
+      <Tabs.Screen name="notifications" options={{ href: null, tabBarStyle: { display: 'none' } }} />
       <Tabs.Screen name="maintenance" options={{ href: null, tabBarStyle: { ...TAB_STYLE, display: 'flex' } }} />
       <Tabs.Screen name="payments" options={{ href: null, tabBarStyle: { ...TAB_STYLE, display: 'flex' } }} />
       <Tabs.Screen name="schedule" options={{ href: null, tabBarStyle: { ...TAB_STYLE, display: 'flex' } }} />
       <Tabs.Screen name="bookings" options={{ href: null, tabBarStyle: { ...TAB_STYLE, display: 'flex' } }} />
       <Tabs.Screen name="applications" options={{ href: null, tabBarStyle: { ...TAB_STYLE, display: 'flex' } }} />
       <Tabs.Screen name="terms" options={{ href: null, tabBarStyle: { display: 'none' } }} />
-      <Tabs.Screen name="allproperties" options={{ href: null, tabBarStyle: { ...TAB_STYLE, display: 'flex' } }} />
       <Tabs.Screen name="assigntenant" options={{ href: null, tabBarStyle: { ...TAB_STYLE, display: 'flex' } }} />
     </Tabs>
   );

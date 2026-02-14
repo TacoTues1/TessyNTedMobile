@@ -295,11 +295,27 @@ export default function Bookings() {
 
             setBookings(finalBookings);
 
+            // AUTO-READ NOTIFICATIONS: If user views bookings, mark booking notifications as read
+            markBookingNotificationsRead(userId);
+
         } catch (error: any) {
             console.error('Error loading bookings:', error);
         } finally {
             setLoading(false);
             setRefreshing(false);
+        }
+    };
+
+    const markBookingNotificationsRead = async (userId: string) => {
+        try {
+            await supabase
+                .from('notifications')
+                .update({ read: true })
+                .eq('recipient', userId)
+                .in('type', ['booking_request', 'booking_approved', 'booking_rejected', 'booking_cancelled', 'new_booking'])
+                .eq('read', false);
+        } catch (e) {
+            console.log("Error auto-reading notifications", e);
         }
     };
 

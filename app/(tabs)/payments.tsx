@@ -59,6 +59,7 @@ export default function Payments() {
   const [appliedCredit, setAppliedCredit] = useState(0);
   const [monthsCovered, setMonthsCovered] = useState(1);
   const [contractEndDate, setContractEndDate] = useState<Date | null>(null);
+  const [contractStartDate, setContractStartDate] = useState<Date | null>(null);
   const [monthlyRent, setMonthlyRent] = useState(0);
   const [maxMonthsAllowed, setMaxMonthsAllowed] = useState(1);
   const [isBelowMinimum, setIsBelowMinimum] = useState(false);
@@ -538,94 +539,149 @@ export default function Payments() {
   const handlePayBill = async (request: any) => {
     setSelectedBill(request);
 
-    // Calculate total bill amount
+    // 1. Calculate Total Bill Amount
     const total = (
       parseFloat(request.rent_amount || 0) +
       parseFloat(request.security_deposit_amount || 0) +
       parseFloat(request.advance_amount || 0) +
       parseFloat(request.water_bill || 0) +
       parseFloat(request.electrical_bill || 0) +
+      parseFloat(request.wifi_bill || 0) +
       parseFloat(request.other_bills || 0)
     );
 
-    // 1. Fetch Credit
+    // 2. Fetch Tenant Credit (filtered by occupancy)
     let credit = 0;
-    // Try to get occupancy_id from bill, or find active occupancy for tenant
-    let targetOccId = request.occupancy_id;
-    if (!targetOccId) {
-      const { data: activeOcc } = await supabase.from('tenant_occupancies').select('id').eq('tenant_id', session.user.id).eq('status', 'active').limit(1).maybeSingle();
-      if (activeOcc) targetOccId = activeOcc.id;
+
+    // Attempt to identify occupancy ID
+    let targetOccupancyId = request.occupancy_id;
+
+    if (!targetOccupancyId) {
+      // If legacy bill without ID, try to find active occupancy
+      const { data: activeOcc } = await supabase
+        .from('tenant_occupancies')
+        .select('id')
+        .eq('tenant_id', session.user.id)
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (activeOcc) targetOccupancyId = activeOcc.id;
     }
 
-    if (targetOccId) {
-      const { data: bal } = await supabase.from('tenant_balances').select('amount').eq('tenant_id', session.user.id).eq('occupancy_id', targetOccId).maybeSingle();
-      credit = bal?.amount || 0;
+    if (targetOccupancyId) {
+      // Fetch credit specific to this occupancy
+      const { data: bal } = await supabase
+        .from('tenant_balances')
+        .select('amount')
+        .eq('tenant_id', session.user.id)
+        .eq('occupancy_id', targetOccupancyId)
+        .maybeSingle();
+      credit = parseFloat(bal?.amount || 0);
     } else {
-      // Fallback checks
-      const { data: bal } = await supabase.from('tenant_balances').select('amount').eq('tenant_id', session.user.id).is('occupancy_id', null).maybeSingle();
-      credit = bal?.amount || 0;
+      // Fallback to general credit (null occupancy_id)
+      const { data: bal } = await supabase
+        .from('tenant_balances')
+        .select('amount')
+        .eq('tenant_id', session.user.id)
+        .is('occupancy_id', null)
+        .maybeSingle();
+      credit = parseFloat(bal?.amount || 0);
     }
+
     setAppliedCredit(credit);
 
-    // 2. Initialize Limit Vars
+    // 3. Calculate Contract Limits
     let limit = Infinity;
     let rentPerMonth = parseFloat(request.rent_amount || 0);
     let endDate: Date | null = null;
     let startDate: Date | null = null;
     let maxMonths = 1;
 
-    // 3. Contracts Calculation
-    if (targetOccId) {
-      const { data: occ } = await supabase.from('tenant_occupancies').select('contract_end_date, start_date, security_deposit, rent_amount').eq('id', targetOccId).single();
-      if (occ) {
-        rentPerMonth = parseFloat(request.rent_amount || occ.rent_amount || 0);
-        endDate = occ.contract_end_date ? new Date(occ.contract_end_date) : null;
-        startDate = occ.start_date ? new Date(occ.start_date) : null;
+    // Use occupancy ID from step 2
+    if (targetOccupancyId) {
+      try {
+        const { data: occupancy } = await supabase
+          .from('tenant_occupancies')
+          .select('contract_end_date, start_date, security_deposit, rent_amount')
+          .eq('id', targetOccupancyId)
+          .single();
 
-        if (endDate && startDate) {
-          const startYear = startDate.getFullYear();
-          const startMonth = startDate.getMonth();
-          const endYear = endDate.getFullYear();
-          const endMonth = endDate.getMonth();
-          const totalContractMonths = (endYear - startYear) * 12 + (endMonth - startMonth);
+        if (occupancy) {
+          // Prefer bill rent amount, fallback to occupancy rent
+          rentPerMonth = parseFloat(request.rent_amount || occupancy.rent_amount || 0);
+          endDate = occupancy.contract_end_date ? new Date(occupancy.contract_end_date) : null;
+          startDate = occupancy.start_date ? new Date(occupancy.start_date) : null;
 
-          const depositAmount = parseFloat(request.security_deposit_amount || occ.security_deposit || 0);
-          let adjustedTotalKey = totalContractMonths;
-          if (rentPerMonth > 0 && depositAmount >= (rentPerMonth * 0.9)) {
-            adjustedTotalKey = Math.max(1, totalContractMonths - 1);
-          }
-          maxMonths = Math.max(1, adjustedTotalKey);
+          if (endDate && startDate) {
+            const startYear = startDate.getFullYear();
+            const startMonth = startDate.getMonth();
+            const endYear = endDate.getFullYear();
+            const endMonth = endDate.getMonth();
 
-          if (endDate < new Date()) {
-            maxMonths = 1;
-            limit = total + parseFloat(request.security_deposit_amount || 0);
-          } else {
-            const maxContractValue = maxMonths * rentPerMonth;
-            const securityDeposit = parseFloat(request.security_deposit_amount || 0);
-            const utilities = (parseFloat(request.water_bill || 0) + parseFloat(request.electrical_bill || 0) + parseFloat(request.other_bills || 0));
-            const advance = parseFloat(request.advance_amount || 0);
-            limit = Math.max(0, maxContractValue + securityDeposit + utilities + advance - credit);
+            // Total months in contract
+            const totalContractMonths = (endYear - startYear) * 12 + (endMonth - startMonth);
+
+            // Check security deposit to see if it covers last month
+            const depositAmount = parseFloat(request.security_deposit_amount || occupancy.security_deposit || 0);
+            let adjustedTotalKey = totalContractMonths;
+
+            // If deposit covers ~1 month rent, deduct 1 month from max payable to prevent overpayment
+            if (rentPerMonth > 0 && depositAmount >= (rentPerMonth * 0.9)) {
+              adjustedTotalKey = Math.max(1, totalContractMonths - 1);
+            }
+
+            maxMonths = Math.max(1, adjustedTotalKey);
+
+            // Limit logic
+            if (endDate < new Date()) {
+              // Contract ended? Limit to just this bill + deposit
+              maxMonths = 1;
+              limit = total + parseFloat(request.security_deposit_amount || 0);
+            } else {
+              // Max rent payments = months * rent per month
+              const maxContractValue = maxMonths * rentPerMonth;
+
+              // Add one-time charges to the limit
+              const securityDeposit = parseFloat(request.security_deposit_amount || 0);
+              const utilities = (
+                parseFloat(request.water_bill || 0) +
+                parseFloat(request.electrical_bill || 0) +
+                parseFloat(request.wifi_bill || 0) +
+                parseFloat(request.other_bills || 0)
+              );
+              const advance = parseFloat(request.advance_amount || 0);
+
+              // Final limit calculation: Max Rent + One-Time Charges - Already Paid Credit
+              limit = Math.max(0, maxContractValue + securityDeposit + utilities + advance - credit);
+            }
           }
         }
+      } catch (err) {
+        console.log("Error calculating contract limits", err);
       }
     }
 
     setMonthlyRent(rentPerMonth);
     setContractEndDate(endDate);
+    setContractStartDate(startDate);
     setMaxMonthsAllowed(maxMonths);
     setMaxPaymentLimit(limit);
     setMonthsCovered(1);
     setExceedsContract(false);
-    setPaymentMethod('cash');
 
+    // 4. Set Initial Amounts
     let toPay = Math.max(0, total - credit);
-    // For renewal bills, default to full amount
+
+    // For renewals, force total amount
     if (request.advance_amount && parseFloat(request.advance_amount) > 0) {
       toPay = Math.max(0, total - credit);
     }
 
     setMinimumPayment(toPay);
     setIsBelowMinimum(false);
+
+    // Default input to the total needed amount (capped by limit)
     setCustomAmount(Math.min(toPay, limit === Infinity ? toPay : limit).toFixed(2));
 
     // Trigger month calc immediately for default
@@ -764,6 +820,120 @@ export default function Payments() {
     }
   };
 
+  const handleStripePayment = async () => {
+    // Basic validation first
+    const amountVal = parseFloat(customAmount) || 0;
+    if (amountVal <= 0) return Alert.alert("Error", "Enter valid amount");
+    if (amountVal < minimumPayment) return Alert.alert("Error", `Minimum payment is ₱${minimumPayment.toLocaleString()}`);
+    if (exceedsContract) return Alert.alert("Error", "Amount exceeds contract period");
+
+    setUploading(true);
+    try {
+      /* 
+       * Use the Next.js API route instead of Supabase Edge Function 
+       * to create a Checkout Session that returns a URL 
+       */
+      const response = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/api/stripe/create-checkout-session`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          amount: amountVal,
+          description: `Payment for ${selectedBill.property?.title} (${selectedBill.is_move_in_payment ? 'Move-in' : 'Bill'})`,
+          bill_id: selectedBill.id,
+          success_url: `${process.env.EXPO_PUBLIC_API_URL}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${process.env.EXPO_PUBLIC_API_URL}/payment-cancel`,
+          customer_email: session.user.email
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create payment link');
+      }
+
+      if (data?.url) {
+        // Open the payment link in browser using WebBrowser, same as PayMongo
+        const result = await WebBrowser.openBrowserAsync(data.url);
+
+        // After browser closes, check status
+        if (data.sessionId) {
+          checkStripeStatus(selectedBill.id, data.sessionId);
+        } else {
+          // Fallback: If sessionId is missing, just try to reload data after a delay
+          setTimeout(() => {
+            loadData(session.user.id, profile.role);
+          }, 3000);
+        }
+      } else {
+        throw new Error("Failed to generate payment link.");
+      }
+    } catch (e: any) {
+      Alert.alert("Error", e.message || "Stripe payment initialization failed.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const checkStripeStatus = async (billId: string, sessionId: string) => {
+    // Poll or check once after delay
+    setTimeout(async () => {
+      try {
+        console.log("Checking Stripe Status for session:", sessionId);
+
+        // Step 1: Retrieve the paymentIntentId from the checkout session
+        const sessionRes = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/api/stripe/retrieve-session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId })
+        });
+
+        const sessionData = await sessionRes.json();
+        console.log("Stripe Session Data:", sessionData);
+
+        if (!sessionRes.ok || !sessionData.paymentIntentId) {
+          console.log("Could not retrieve payment intent from session. Payment may still be processing.");
+          // Reload data in case webhook already processed it
+          loadData(session.user.id, profile.role);
+          return;
+        }
+
+        // Only proceed if payment was actually completed
+        if (sessionData.paymentStatus !== 'paid') {
+          console.log("Payment not yet completed. Status:", sessionData.paymentStatus);
+          Alert.alert("Info", "Payment not yet completed. Please check back later.");
+          loadData(session.user.id, profile.role);
+          return;
+        }
+
+        // Step 2: Call process-stripe-success with the correct paymentIntentId
+        const res = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/api/payments/process-stripe-success`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paymentRequestId: billId, paymentIntentId: sessionData.paymentIntentId })
+        });
+
+        const data = await res.json();
+        console.log("Stripe Status Response:", data);
+
+        if (res.ok && data.success) {
+          Alert.alert("Success", "Payment confirmed via Stripe!");
+          setShowPayModal(false);
+          loadData(session.user.id, profile.role);
+        } else {
+          // Even if 'process' failed (maybe already processed by webhook), reload data
+          loadData(session.user.id, profile.role);
+        }
+      } catch (e) {
+        console.log("Check Stripe Status Error:", e);
+        // Silent fail, just reload
+        loadData(session.user.id, profile.role);
+      }
+    }, 5000); // 5 second delay to allow Stripe latency
+  };
+
   const pickImage = async () => {
     let result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, quality: 0.7, base64: true });
     if (!result.canceled) setProofImage(result.assets[0]);
@@ -779,7 +949,8 @@ export default function Payments() {
       return;
     }
     if (paymentMethod === 'stripe') {
-      return Alert.alert("Coming Soon", "Stripe payment is not yet available on mobile.");
+      await handleStripePayment();
+      return;
     }
 
     const amountVal = parseFloat(customAmount) || 0;
@@ -1241,76 +1412,261 @@ export default function Payments() {
         </View>
       </Modal>
 
-      {/* PAY MODAL */}
+      {/* PAY MODAL - REDESIGNED */}
       <Modal visible={showPayModal} animationType="slide" presentationStyle="pageSheet">
         <View style={styles.modalContainer}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 }}>
-            <Text style={styles.modalTitle}>Pay Bill</Text>
-            <TouchableOpacity onPress={() => setShowPayModal(false)}><Ionicons name="close" size={24} /></TouchableOpacity>
+          {/* Header */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 25, position: 'relative' }}>
+            <TouchableOpacity onPress={() => setShowPayModal(false)} style={{ position: 'absolute', left: 0, padding: 8, backgroundColor: '#f3f4f6', borderRadius: 20 }}>
+              <Ionicons name="arrow-back" size={20} color="#000" />
+            </TouchableOpacity>
+            <Text style={{ fontSize: 18, fontWeight: '800' }}>Payment</Text>
+            {/* <TouchableOpacity style={{ position: 'absolute', right: 0, padding: 8 }}>
+              <Ionicons name="ellipsis-horizontal" size={20} color="#000" />
+            </TouchableOpacity> */}
           </View>
 
-          <ScrollView>
-            <View style={styles.billSection}>
-              <Text style={styles.billSectionTitle}>Total Due: ₱{selectedBill ? getTotal(selectedBill).toLocaleString() : 0}</Text>
-              {appliedCredit > 0 && <Text style={{ color: 'green', fontSize: 12 }}>Credit Applied: -₱{appliedCredit.toLocaleString()}</Text>}
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+
+            {/* Bill Summary - Detailed Breakdown */}
+            <View style={{ backgroundColor: '#f9fafb', padding: 16, borderRadius: 16, marginBottom: 24 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+                <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: '#e5e7eb', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                  <Ionicons name="receipt" size={20} color="#4b5563" />
+                </View>
+                <View>
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: '#111' }}>Bill Details</Text>
+                  <Text style={{ fontSize: 12, color: '#6b7280' }}>{selectedBill?.bills_description}</Text>
+                </View>
+              </View>
+
+              {selectedBill && (
+                <View style={{ gap: 8 }}>
+                  {parseFloat(selectedBill.rent_amount || 0) > 0 && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={{ fontSize: 14, color: '#6b7280' }}>Rent</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151' }}>₱{parseFloat(selectedBill.rent_amount).toLocaleString()}</Text>
+                    </View>
+                  )}
+                  {parseFloat(selectedBill.advance_amount || 0) > 0 && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={{ fontSize: 14, color: '#6b7280' }}>Advance Payment</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151' }}>₱{parseFloat(selectedBill.advance_amount).toLocaleString()}</Text>
+                    </View>
+                  )}
+                  {parseFloat(selectedBill.security_deposit_amount || 0) > 0 && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={{ fontSize: 14, color: '#6b7280' }}>Security Deposit</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151' }}>₱{parseFloat(selectedBill.security_deposit_amount).toLocaleString()}</Text>
+                    </View>
+                  )}
+                  {parseFloat(selectedBill.water_bill || 0) > 0 && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={{ fontSize: 14, color: '#6b7280' }}>Water Bill</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151' }}>₱{parseFloat(selectedBill.water_bill).toLocaleString()}</Text>
+                    </View>
+                  )}
+                  {parseFloat(selectedBill.electrical_bill || 0) > 0 && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={{ fontSize: 14, color: '#6b7280' }}>Electric Bill</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151' }}>₱{parseFloat(selectedBill.electrical_bill).toLocaleString()}</Text>
+                    </View>
+                  )}
+                  {parseFloat(selectedBill.other_bills || 0) > 0 && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={{ fontSize: 14, color: '#6b7280' }}>Other Fees</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151' }}>₱{parseFloat(selectedBill.other_bills).toLocaleString()}</Text>
+                    </View>
+                  )}
+
+                  {selectedBill.due_date && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={{ fontSize: 14, color: '#6b7280' }}>Due Date</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151' }}>
+                        {new Date(selectedBill.due_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </Text>
+                    </View>
+                  )}
+
+                  <View style={{ height: 1, backgroundColor: '#e5e7eb', marginVertical: 8 }} />
+
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={{ fontSize: 16, fontWeight: '800', color: '#111' }}>Total Due</Text>
+                    <Text style={{ fontSize: 18, fontWeight: '900', color: '#048818ff' }}>₱{selectedBill ? getTotal(selectedBill).toLocaleString() : 0}</Text>
+                  </View>
+                </View>
+              )}
             </View>
 
-            <Text style={styles.label}>AMOUNT TO PAY</Text>
-            <TextInput style={styles.input} value={customAmount} onChangeText={calculateMonthsCovered} keyboardType="numeric" />
+            {/* Amount Input */}
+            <View style={{ marginBottom: 24 }}>
+              <Text style={{ fontSize: 13, fontWeight: '600', color: '#6b7280', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>Amount to Pay</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 16, paddingHorizontal: 16 }}>
+                <Text style={{ fontSize: 18, fontWeight: '700', color: '#111', marginRight: 8 }}>₱</Text>
+                <TextInput
+                  style={{ flex: 1, height: 56, fontSize: 18, fontWeight: '700', color: '#111' }}
+                  value={customAmount}
+                  onChangeText={calculateMonthsCovered}
+                  keyboardType="numeric"
+                />
+              </View>
 
-            {monthsCovered > 1 && <Text style={{ color: 'green', marginVertical: 5 }}>Covers {monthsCovered} months</Text>}
-            {exceedsContract && <Text style={{ color: 'red', marginVertical: 5 }}>Exceeds contract duration!</Text>}
-
-            {isBelowMinimum && (
-              <Text style={{ color: 'red', fontSize: 12, fontWeight: 'bold', marginVertical: 4 }}>
-                Minimum payment is ₱{minimumPayment.toLocaleString()}
-              </Text>
-            )}
-
-            {minimumPayment <= 0 && appliedCredit > 0 ? (
-              <TouchableOpacity onPress={handleCreditPayment} style={[styles.payBtn, { backgroundColor: '#22c55e', marginTop: 10 }]}>
-                <Text style={{ color: 'white', fontWeight: 'bold' }}>Pay with Credit Balance</Text>
-              </TouchableOpacity>
-            ) : (
-              <>
-                <Text style={styles.label}>PAYMENT METHOD</Text>
-                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 20 }}>
-                  {/* CASH */}
-                  <TouchableOpacity onPress={() => setPaymentMethod('cash')} style={[styles.paymentCard, paymentMethod === 'cash' && styles.paymentCardActive]}>
-                    <Ionicons name="cash-outline" size={24} color={paymentMethod === 'cash' ? "white" : "black"} />
-                    <Text style={[styles.paymentCardText, paymentMethod === 'cash' && { color: 'white' }]}>Cash</Text>
-                  </TouchableOpacity>
-
-                  {/* STRIPE */}
-                  <TouchableOpacity onPress={() => setPaymentMethod('stripe')} style={[styles.paymentCard, paymentMethod === 'stripe' && { backgroundColor: '#6772e5', borderColor: '#6772e5' }]}>
-                    <Ionicons name="card-outline" size={24} color={paymentMethod === 'stripe' ? "white" : "black"} />
-                    <Text style={[styles.paymentCardText, paymentMethod === 'stripe' && { color: 'white' }]}>Stripe</Text>
-                  </TouchableOpacity>
-
-                  {/* PAYMONGO */}
-                  <TouchableOpacity onPress={() => setPaymentMethod('paymongo')} style={[styles.paymentCard, paymentMethod === 'paymongo' && { backgroundColor: '#00BFA5', borderColor: '#00BFA5' }]}>
-                    <Ionicons name="wallet-outline" size={24} color={paymentMethod === 'paymongo' ? "white" : "black"} />
-                    <Text style={[styles.paymentCardText, paymentMethod === 'paymongo' && { color: 'white' }]}>GCash/Maya</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {paymentMethod === 'cash' && (
-                  <>
-                    <Text style={styles.label}>REFERENCE NO / PROOF</Text>
-                    <TextInput style={[styles.input, { marginBottom: 10 }]} placeholder="Ref No." value={referenceNumber} onChangeText={setReferenceNumber} />
-
-                    <TouchableOpacity onPress={pickImage} style={styles.uploadBtn}>
-                      {proofImage ? <Image source={{ uri: proofImage.uri }} style={{ width: '100%', height: '100%', borderRadius: 8 }} /> : <Text style={{ color: '#999' }}>Tap to upload Screenshot</Text>}
-                    </TouchableOpacity>
-                  </>
+              {/* Messages for Amount Input */}
+              <View style={{ marginTop: 8, paddingHorizontal: 4 }}>
+                {monthsCovered > 1 && !exceedsContract && (
+                  <View>
+                    <Text style={{ color: '#059669', fontSize: 13, fontWeight: '700' }}>✓ Covers {monthsCovered} months</Text>
+                    {contractEndDate && (
+                      <Text style={{ color: '#6b7280', fontSize: 11, marginTop: 2 }}>
+                        Until {new Date(new Date(selectedBill.due_date).setMonth(new Date(selectedBill.due_date).getMonth() + monthsCovered - 1)).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+                      </Text>
+                    )}
+                  </View>
                 )}
-              </>
-            )}
 
-            <TouchableOpacity onPress={submitPayment} disabled={uploading} style={[styles.payBtn, { marginTop: 20, alignItems: 'center', padding: 15 }]}>
-              {uploading ? <ActivityIndicator color="white" /> : <Text style={{ color: 'white', fontWeight: 'bold' }}>SUBMIT PAYMENT</Text>}
-            </TouchableOpacity>
+                {exceedsContract && (
+                  <View>
+                    <Text style={{ color: '#dc2626', fontSize: 13, fontWeight: '700' }}>⚠ Exceeds Contract Period!</Text>
+                    <Text style={{ color: '#dc2626', fontSize: 11, marginTop: 2 }}>
+                      Max allowed is {maxMonthsAllowed} months (₱{maxPaymentLimit?.toLocaleString()}).
+                      Contract ends {contractEndDate?.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}.
+                    </Text>
+                  </View>
+                )}
+
+                {isBelowMinimum && (
+                  <Text style={{ color: '#dc2626', fontSize: 13, fontWeight: '700' }}>
+                    Minimum: ₱{minimumPayment.toLocaleString()}
+                  </Text>
+                )}
+              </View>
+            </View>
+
+            <Text style={{ fontSize: 16, fontWeight: '800', color: '#111', marginBottom: 16 }}>Payment Methods</Text>
+
+            {/* Payment Methods List */}
+            <View>
+              {/* Stripe */}
+              <TouchableOpacity onPress={() => setPaymentMethod('stripe')} activeOpacity={0.9} style={[styles.methodCard, paymentMethod === 'stripe' && styles.methodCardSelected]}>
+                <View style={styles.methodIcon}>
+                  <Ionicons name="card" size={22} color={paymentMethod === 'stripe' ? '#048818' : '#6b7280'} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.methodTitle}>Stripe (Credit/Debit Card)</Text>
+                  <Text style={styles.methodSubtitle}>Pay via Stripe Secure Checkout</Text>
+                </View>
+                <View style={[styles.radio, paymentMethod === 'stripe' && styles.radioSelected]}>
+                  {paymentMethod === 'stripe' && <View style={styles.radioInner} />}
+                </View>
+              </TouchableOpacity>
+
+              {/* PayMongo / GCash / Cards */}
+              <TouchableOpacity onPress={() => setPaymentMethod('paymongo')} activeOpacity={0.9} style={[styles.methodCard, paymentMethod === 'paymongo' && styles.methodCardSelected]}>
+                <View style={styles.methodIcon}>
+                  <Ionicons name="wallet" size={22} color={paymentMethod === 'paymongo' ? '#048818' : '#6b7280'} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.methodTitle}>GCash / Maya / GrabPay</Text>
+                  <Text style={styles.methodSubtitle}>E-wallets via PayMongo</Text>
+                </View>
+                <View style={[styles.radio, paymentMethod === 'paymongo' && styles.radioSelected]}>
+                  {paymentMethod === 'paymongo' && <View style={styles.radioInner} />}
+                </View>
+              </TouchableOpacity>
+
+              {/* Cash */}
+              <TouchableOpacity onPress={() => setPaymentMethod('cash')} activeOpacity={0.9} style={[styles.methodCard, paymentMethod === 'cash' && styles.methodCardSelected]}>
+                <View style={styles.methodIcon}>
+                  <Ionicons name="cash" size={22} color={paymentMethod === 'cash' ? '#048818' : '#6b7280'} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.methodTitle}>Cash Payment</Text>
+                  <Text style={styles.methodSubtitle}>Upload proof of payment</Text>
+                </View>
+                <View style={[styles.radio, paymentMethod === 'cash' && styles.radioSelected]}>
+                  {paymentMethod === 'cash' && <View style={styles.radioInner} />}
+                </View>
+              </TouchableOpacity>
+
+              {/* Credit Balance (if available) */}
+              {appliedCredit > 0 && (
+                <TouchableOpacity onPress={handleCreditPayment} disabled={minimumPayment > 0} activeOpacity={0.9} style={[styles.methodCard, minimumPayment <= 0 && styles.methodCardSelected, { opacity: minimumPayment > 0 ? 0.6 : 1 }]}>
+                  <View style={styles.methodIcon}>
+                    <Ionicons name="wallet" size={22} color={minimumPayment <= 0 ? '#048818' : '#6b7280'} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.methodTitle}>Wallet Balance</Text>
+                    <Text style={styles.methodSubtitle}>Available: ₱{appliedCredit.toLocaleString()}</Text>
+                  </View>
+                  {minimumPayment <= 0 ? (
+                    <View style={[styles.radio, styles.radioSelected]}><View style={styles.radioInner} /></View>
+                  ) : (
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#dc2626' }}>Insufficient</Text>
+                  )}
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Cash Fields */}
+            {/* {paymentMethod === 'cash' && (
+              <View style={{ marginTop: 24, padding: 16, backgroundColor: '#f9fafb', borderRadius: 16 }}>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#374151', marginBottom: 12 }}>PROOF OF PAYMENT</Text>
+
+                <TextInput
+                  style={{ backgroundColor: '#fff', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, padding: 14, fontSize: 14, marginBottom: 12 }}
+                  placeholder="Reference Number (Optional)"
+                  value={referenceNumber}
+                  onChangeText={setReferenceNumber}
+                />
+
+                <TouchableOpacity onPress={pickImage} style={{ height: 120, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e5e7eb', borderStyle: 'dashed', borderRadius: 12, alignItems: 'center', justifyContent: 'center' }}>
+                  {proofImage ? (
+                    <Image source={{ uri: proofImage.uri }} style={{ width: '100%', height: '100%', borderRadius: 12 }} />
+                  ) : (
+                    <View style={{ alignItems: 'center' }}>
+                      <Ionicons name="cloud-upload-outline" size={24} color="#9ca3af" />
+                      <Text style={{ color: '#9ca3af', fontSize: 12, fontWeight: '600', marginTop: 8 }}>Upload Screenshot or Photo</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              </View>
+            )} */}
+
           </ScrollView>
+
+          {/* Footer - Sticky Button */}
+          <View style={{ paddingTop: 16, borderTopWidth: 1, borderColor: '#f3f4f6' }}>
+            <TouchableOpacity
+              onPress={submitPayment}
+              disabled={uploading}
+              activeOpacity={0.9}
+              style={{
+                backgroundColor: uploading ? '#555' : '#000000ff',
+                height: 58,
+                borderRadius: 29,
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexDirection: 'row',
+                gap: 10,
+                shadowColor: '#000000ff',
+                shadowOpacity: uploading ? 0.1 : 0.3,
+                shadowRadius: 8,
+                shadowOffset: { width: 0, height: 4 },
+                elevation: uploading ? 2 : 6,
+                opacity: uploading ? 0.7 : 1
+              }}
+            >
+              {uploading ? (
+                <>
+                  <ActivityIndicator color="white" size="small" />
+                  <Text style={{ color: 'white', fontSize: 15, fontWeight: '700' }}>Redirecting, please wait...</Text>
+                </>
+              ) : (
+                <Text style={{ color: 'white', fontSize: 16, fontWeight: '800' }}>Continue to Pay ₱{customAmount}</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+
         </View>
       </Modal>
 
@@ -1319,7 +1675,7 @@ export default function Payments() {
 }
 
 const styles = StyleSheet.create({
-  // Bill Card (replaces table rows)
+  // ... existing styles ...
   billCard: {
     backgroundColor: 'white',
     padding: 16,
@@ -1334,23 +1690,63 @@ const styles = StyleSheet.create({
     elevation: 2
   },
   actionBtnPrimary: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: '#000',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8
+    flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#000',
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8
   },
   actionBtnSmall: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center'
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8,
+    alignItems: 'center', justifyContent: 'center'
   },
 
-  // Legacy styles still used by modals
+  // NEW PAYMENT STYLES
+  methodCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: 'white',
+    borderWidth: 1.5,
+    borderColor: '#f3f4f6',
+    borderRadius: 16,
+    marginBottom: 12,
+  },
+  methodCardSelected: {
+    borderColor: '#048818',
+    backgroundColor: '#f0fdf4',
+  },
+  methodIcon: {
+    width: 44, height: 44,
+    borderRadius: 12,
+    backgroundColor: '#f9fafb',
+    alignItems: 'center', justifyContent: 'center',
+    marginRight: 14,
+  },
+  methodTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111',
+  },
+  methodSubtitle: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 2,
+  },
+  radio: {
+    width: 22, height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: '#d1d5db',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  radioSelected: {
+    borderColor: '#048818',
+  },
+  radioInner: {
+    width: 12, height: 12,
+    borderRadius: 6,
+    backgroundColor: '#048818',
+  },
+
+  // Legacy kept for other modals
   iconBtn: { padding: 8, borderRadius: 20, backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center' },
   badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1, borderColor: 'transparent' },
   badgeGreen: { backgroundColor: '#dcfce7', borderColor: '#dcfce7' },
@@ -1361,7 +1757,7 @@ const styles = StyleSheet.create({
   payBtn: { backgroundColor: '#000', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8 },
   payBtnText: { color: 'white', fontSize: 12, fontWeight: 'bold' },
   createBtn: { backgroundColor: 'black', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 15, borderRadius: 12, marginBottom: 10, gap: 10 },
-  modalContainer: { flex: 1, padding: 20, backgroundColor: 'white', marginTop: 20 },
+  modalContainer: { flex: 1, padding: 24, backgroundColor: 'white', marginTop: 10 },
   modalTitle: { fontSize: 20, fontWeight: 'bold' },
   tabContainer: { flexDirection: 'row', paddingVertical: 12, paddingHorizontal: 20, gap: 8, backgroundColor: 'white', borderBottomWidth: 1, borderColor: '#f0f0f0' },
   tab: { paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20, backgroundColor: '#f3f4f6' },
@@ -1372,13 +1768,15 @@ const styles = StyleSheet.create({
   input: { borderWidth: 1, borderColor: '#ddd', padding: 12, borderRadius: 8, fontSize: 16 },
   billSection: { backgroundColor: '#f8fafc', padding: 15, borderRadius: 12, marginBottom: 10, alignItems: 'center' },
   billSectionTitle: { fontSize: 18, fontWeight: 'bold' },
-  paymentCard: { flex: 1, padding: 15, borderWidth: 1, borderColor: '#eee', borderRadius: 12, alignItems: 'center', justifyContent: 'center', gap: 5 },
-  paymentCardActive: { backgroundColor: 'black', borderColor: 'black' },
-  paymentCardText: { fontSize: 12, fontWeight: 'bold', color: 'black' },
   uploadBtn: { height: 150, borderWidth: 1, borderColor: '#ddd', borderStyle: 'dashed', borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginTop: 10 },
   chip: { padding: 8, borderRadius: 8, backgroundColor: '#eee' },
   chipActive: { backgroundColor: 'black' },
   chipText: { fontSize: 12, fontWeight: 'bold', color: '#666' },
-  navCreateBtn: { backgroundColor: 'black', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 }
+  navCreateBtn: { backgroundColor: 'black', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
+
+  // Unused but kept to prevent breakages if referenced elsewhere
+  paymentCard: { flex: 1, padding: 15, borderWidth: 1, borderColor: '#eee', borderRadius: 12, alignItems: 'center', justifyContent: 'center', gap: 5 },
+  paymentCardActive: { backgroundColor: 'black', borderColor: 'black' },
+  paymentCardText: { fontSize: 12, fontWeight: 'bold', color: 'black' },
 });
 

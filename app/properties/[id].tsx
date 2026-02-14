@@ -5,8 +5,13 @@ import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator, Alert, Dimensions,
   FlatList,
-  Image, Modal, ScrollView,
-  StyleSheet, Text, TextInput, TouchableOpacity, View
+  Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet, Text, TextInput, TouchableOpacity,
+  View
 } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import { supabase } from '../../lib/supabase';
@@ -635,136 +640,10 @@ export default function PropertyDetail() {
                   <View style={styles.infoBoxGray}><Text style={styles.infoTextGray}>Logged in as Landlord</Text></View>
                 ) : activeOccupancyCheck(hasActiveOccupancy, occupiedPropertyTitle) ? (
                   <View style={styles.infoBoxYellow}><Text style={styles.infoTextYellow}>You have an active occupancy.</Text></View>
-                ) : !showBookingOptions && (
-                  <TouchableOpacity style={styles.btnBlack} onPress={handleOpenBooking}>
-                    <Text style={styles.btnTextWhite}>Book a Viewing</Text>
-                  </TouchableOpacity>
-                )}
+                ) : null}
               </View>
 
-              {/* Expandable Booking Form */}
-              {showBookingOptions && !isOwner && !isLandlordRole && (
-                <View style={[styles.bookingForm, { marginTop: 15 }]}>
-                  <View style={styles.rowBetween}>
-                    <Text style={styles.label}>SELECT SCHEDULE</Text>
-                    <TouchableOpacity onPress={handleCancelBooking}><Ionicons name="close-circle" size={24} color="#ccc" /></TouchableOpacity>
-                  </View>
 
-                  {/* CALENDAR IMPLEMENTATION */}
-                  {(() => {
-                    const slotsByDate: any = {};
-                    timeSlots.forEach(slot => {
-                      const d = new Date(slot.start_time);
-                      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                      if (!slotsByDate[key]) slotsByDate[key] = [];
-                      slotsByDate[key].push(slot);
-                    });
-
-                    // Generate months (simplified to current + next)
-                    const today = new Date();
-                    const year = today.getFullYear();
-                    const month = today.getMonth();
-                    const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-                    const selectedSlotData = timeSlots.find(s => s.id === selectedSlotId);
-                    const selectedDateKey = selectedSlotData
-                      ? `${new Date(selectedSlotData.start_time).getFullYear()}-${String(new Date(selectedSlotData.start_time).getMonth() + 1).padStart(2, '0')}-${String(new Date(selectedSlotData.start_time).getDate()).padStart(2, '0')}`
-                      : null;
-
-                    return (
-                      <View style={styles.calendarContainer}>
-                        {/* Calendar Grid */}
-                        <View style={styles.calendarHeader}>
-                          <Text style={styles.monthName}>{today.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</Text>
-                        </View>
-                        <View style={styles.weekRow}>
-                          {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => <Text key={i} style={styles.weekDay}>{d}</Text>)}
-                        </View>
-                        <View style={styles.daysGrid}>
-                          {Array.from({ length: daysInMonth }).map((_, i) => {
-                            const day = i + 1;
-                            const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                            const dateObj = new Date(year, month, day);
-                            const hasSlots = !!slotsByDate[dateKey];
-                            const isSelected = selectedDateKey === dateKey;
-                            const isPast = dateObj < new Date(new Date().setHours(0, 0, 0, 0));
-
-                            return (
-                              <TouchableOpacity
-                                key={day}
-                                disabled={!hasSlots || isPast}
-                                onPress={() => {
-                                  const slots = slotsByDate[dateKey];
-                                  if (slots && slots.length > 0) setSelectedSlotId(slots[0].id);
-                                }}
-                                style={[
-                                  styles.dayCell,
-                                  isSelected && styles.dayCellSelected,
-                                  (!hasSlots || isPast) && styles.dayCellDisabled
-                                ]}
-                              >
-                                <Text style={[styles.dayText, isSelected && { color: 'white' }, (!hasSlots || isPast) && { color: '#ddd' }]}>{day}</Text>
-                                {hasSlots && !isPast && !isSelected && <View style={styles.dayDot} />}
-                              </TouchableOpacity>
-                            );
-                          })}
-                        </View>
-
-                        {/* Time Slot Selector (if date selected) */}
-                        {selectedDateKey && (
-                          <View style={styles.slotSelector}>
-                            <Text style={styles.label}>AVAILABLE TIMES</Text>
-                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 5 }}>
-                              {slotsByDate[selectedDateKey]?.map((slot: any) => {
-                                const isActive = selectedSlotId === slot.id;
-                                return (
-                                  <TouchableOpacity
-                                    key={slot.id}
-                                    onPress={() => setSelectedSlotId(slot.id)}
-                                    style={[styles.timeChip, isActive && styles.timeChipActive]}
-                                  >
-                                    <Text style={[styles.timeChipText, isActive && { color: 'white' }]}>
-                                      {new Date(slot.start_time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-                                    </Text>
-                                  </TouchableOpacity>
-                                );
-                              })}
-                            </View>
-                          </View>
-                        )}
-                      </View>
-                    );
-                  })()}
-
-                  <Text style={[styles.label, { marginTop: 15 }]}>MESSAGE (OPTIONAL)</Text>
-                  <TextInput
-                    style={styles.textArea}
-                    multiline
-                    numberOfLines={3}
-                    placeholder="Any requests?"
-                    value={bookingNote}
-                    onChangeText={setBookingNote}
-                  />
-
-                  <TouchableOpacity style={styles.checkboxRow} onPress={() => setTermsAccepted(!termsAccepted)}>
-                    <Ionicons name={termsAccepted ? "checkbox" : "square-outline"} size={20} color="black" />
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-                      <Text style={{ fontSize: 12, marginLeft: 8 }}>I agree to </Text>
-                      <TouchableOpacity onPress={openTerms}>
-                        <Text style={{ fontSize: 12, fontWeight: 'bold', textDecorationLine: 'underline' }}>Terms & Conditions</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.btnBlack, (!termsAccepted || !selectedSlotId) && { backgroundColor: '#ccc' }]}
-                    disabled={!termsAccepted || !selectedSlotId || submitting}
-                    onPress={handleConfirmBooking}
-                  >
-                    {submitting ? <ActivityIndicator color="white" /> : <Text style={styles.btnTextWhite}>Confirm Booking</Text>}
-                  </TouchableOpacity>
-                </View>
-              )}
             </View>
           </View>
 
@@ -787,7 +666,7 @@ export default function PropertyDetail() {
             </View>
           )}
 
-          <View style={{ height: 50 }} />
+          <View style={{ height: 100 }} />
         </View>
       </ScrollView>
 
@@ -865,6 +744,146 @@ export default function PropertyDetail() {
           />
         </View>
       </Modal>
+
+      {/* BOOKING MODAL (Bottom Sheet) */}
+      <Modal visible={showBookingOptions} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.modalContent}
+          >
+            <View style={styles.rowBetween}>
+              <Text style={[styles.sectionTitle, { marginBottom: 15 }]}>Book Viewing</Text>
+              <TouchableOpacity onPress={handleCancelBooking} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close-circle" size={28} color="#ccc" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: height * 0.7 }}>
+              {/* CALENDAR IMPLEMENTATION COPY */}
+              {(() => {
+                const slotsByDate: any = {};
+                timeSlots.forEach(slot => {
+                  const d = new Date(slot.start_time);
+                  const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                  if (!slotsByDate[key]) slotsByDate[key] = [];
+                  slotsByDate[key].push(slot);
+                });
+
+                const today = new Date();
+                const year = today.getFullYear();
+                const month = today.getMonth();
+                const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+                const selectedSlotData = timeSlots.find(s => s.id === selectedSlotId);
+                const selectedDateKey = selectedSlotData
+                  ? `${new Date(selectedSlotData.start_time).getFullYear()}-${String(new Date(selectedSlotData.start_time).getMonth() + 1).padStart(2, '0')}-${String(new Date(selectedSlotData.start_time).getDate()).padStart(2, '0')}`
+                  : null;
+
+                return (
+                  <View style={styles.calendarContainer}>
+                    <View style={styles.calendarHeader}>
+                      <Text style={styles.monthName}>{today.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</Text>
+                    </View>
+                    <View style={styles.weekRow}>
+                      {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => <Text key={i} style={styles.weekDay}>{d}</Text>)}
+                    </View>
+                    <View style={styles.daysGrid}>
+                      {Array.from({ length: daysInMonth }).map((_, i) => {
+                        const day = i + 1;
+                        const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                        const dateObj = new Date(year, month, day);
+                        const hasSlots = !!slotsByDate[dateKey];
+                        const isSelected = selectedDateKey === dateKey;
+                        const isPast = dateObj < new Date(new Date().setHours(0, 0, 0, 0));
+
+                        return (
+                          <TouchableOpacity
+                            key={day}
+                            disabled={!hasSlots || isPast}
+                            onPress={() => {
+                              const slots = slotsByDate[dateKey];
+                              if (slots && slots.length > 0) setSelectedSlotId(slots[0].id);
+                            }}
+                            style={[
+                              styles.dayCell,
+                              isSelected && styles.dayCellSelected,
+                              (!hasSlots || isPast) && styles.dayCellDisabled
+                            ]}
+                          >
+                            <Text style={[styles.dayText, isSelected && { color: 'white' }, (!hasSlots || isPast) && { color: '#ccc' }]}>{day}</Text>
+                            {hasSlots && !isPast && !isSelected && <View style={styles.dayDot} />}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+
+                    {selectedDateKey && (
+                      <View style={styles.slotSelector}>
+                        <Text style={styles.label}>AVAILABLE TIMES</Text>
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 5 }}>
+                          {slotsByDate[selectedDateKey]?.map((slot: any) => {
+                            const isActive = selectedSlotId === slot.id;
+                            return (
+                              <TouchableOpacity
+                                key={slot.id}
+                                onPress={() => setSelectedSlotId(slot.id)}
+                                style={[styles.timeChip, isActive && styles.timeChipActive]}
+                              >
+                                <Text style={[styles.timeChipText, isActive && { color: 'white' }]}>
+                                  {new Date(slot.start_time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
+                      </View>
+                    )}
+                  </View>
+                );
+              })()}
+
+              <Text style={[styles.label, { marginTop: 15 }]}>MESSAGE (OPTIONAL)</Text>
+              <TextInput
+                style={styles.textArea}
+                multiline
+                numberOfLines={3}
+                placeholder="Requests or questions?..."
+                value={bookingNote}
+                onChangeText={setBookingNote}
+              />
+
+              <TouchableOpacity style={styles.checkboxRow} onPress={() => setTermsAccepted(!termsAccepted)}>
+                <Ionicons name={termsAccepted ? "checkbox" : "square-outline"} size={20} color="black" />
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                  <Text style={{ fontSize: 12, marginLeft: 8 }}>I agree to </Text>
+                  <TouchableOpacity onPress={openTerms}>
+                    <Text style={{ fontSize: 12, fontWeight: 'bold', textDecorationLine: 'underline' }}>Terms & Conditions</Text>
+                  </TouchableOpacity>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.btnBlack, (!termsAccepted || !selectedSlotId) && { backgroundColor: '#ccc' }]}
+                disabled={!termsAccepted || !selectedSlotId || submitting}
+                onPress={handleConfirmBooking}
+              >
+                {submitting ? <ActivityIndicator color="white" /> : <Text style={styles.btnTextWhite}>Confirm Booking</Text>}
+              </TouchableOpacity>
+              <View style={{ height: 20 }} />
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      {/* STICKY FOOTER */}
+      {!isOwner && !isLandlordRole && !activeOccupancyCheck(hasActiveOccupancy, activeOccupancyCheck.length > 1 ? occupiedPropertyTitle : '') && (
+        <View style={styles.stickyFooter}>
+          <TouchableOpacity style={styles.btnBlack} onPress={handleOpenBooking}>
+            <Text style={styles.btnTextWhite}>Book a Viewing</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
     </View>
   );
@@ -1000,6 +1019,22 @@ const styles = StyleSheet.create({
   myLocBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 8, alignSelf: 'flex-end' },
 
   // New Landlord Section
+  stickyFooter: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'white',
+    padding: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+    elevation: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 5,
+    zIndex: 100,
+  },
   landlordContainer: { backgroundColor: 'white', borderRadius: 12, padding: 20, borderWidth: 1, borderColor: '#eee' },
   hostProfile: { flexDirection: 'row', alignItems: 'center', gap: 15, marginBottom: 20 },
   hostAvatar: { width: 50, height: 50, borderRadius: 25 },
@@ -1008,4 +1043,7 @@ const styles = StyleSheet.create({
   contactBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, backgroundColor: '#f3f4f6', borderRadius: 8 },
   contactBtnText: { fontWeight: 'bold', fontSize: 12 },
 
+  // Booking Modal
+  modalOverlay: { flex: 1, justifyContent: 'flex-end' },
+  modalContent: { backgroundColor: 'white', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: '90%' },
 });

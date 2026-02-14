@@ -1,14 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Image,
-  Modal,
   StyleSheet,
   Text, TouchableOpacity,
-  TouchableWithoutFeedback,
   View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -24,6 +22,7 @@ export default function Dashboard() {
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [menuVisible, setMenuVisible] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   // Security State
   const [isDuplicate, setIsDuplicate] = useState(false);
@@ -32,6 +31,37 @@ export default function Dashboard() {
   useEffect(() => {
     checkUser();
   }, []);
+
+  // Poll for notifications every 60s
+  useEffect(() => {
+    fetchUnreadCount();
+    const interval = setInterval(fetchUnreadCount, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Refresh notification count when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      fetchUnreadCount();
+    }, [])
+  );
+
+  const fetchUnreadCount = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const { count } = await supabase
+        .from('notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('recipient', session.user.id)
+        .eq('read', false);
+
+      setUnreadCount(count || 0);
+    } catch (e) {
+      console.log("Error fetching notifications", e);
+    }
+  };
 
   const checkUser = useCallback(async () => {
     try {
@@ -156,19 +186,30 @@ export default function Dashboard() {
           </View>
         </View>
         <TouchableOpacity
-          style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
-          onPress={() => setMenuVisible(true)}
+          style={styles.notificationBtn}
+          onPress={() => router.push('/(tabs)/notifications' as any)}
         >
-          <View style={styles.profileBtn}>
-            {profile?.avatar_url ? (
-              <Image source={{ uri: profile.avatar_url }} style={styles.avatarImage} />
-            ) : (
-              <Text style={styles.avatarText}>
-                {profile?.first_name?.[0]?.toUpperCase() || "U"}
+          <Ionicons name="notifications-outline" size={24} color="#333" />
+          {unreadCount > 0 && (
+            <View style={{
+              position: 'absolute',
+              top: -2,
+              right: -2,
+              minWidth: 18,
+              height: 18,
+              borderRadius: 9,
+              backgroundColor: '#ef4444',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderWidth: 1.5,
+              borderColor: 'white',
+              paddingHorizontal: 4
+            }}>
+              <Text style={{ color: 'white', fontSize: 10, fontWeight: 'bold' }}>
+                {unreadCount > 99 ? '99+' : unreadCount}
               </Text>
-            )}
-          </View>
-          <Ionicons name="chevron-down" size={20} color="#333" />
+            </View>
+          )}
         </TouchableOpacity>
       </View>
 
@@ -208,41 +249,6 @@ export default function Dashboard() {
           <TenantDashboard session={session} profile={profile} />
         )
       )}
-
-      {/* --- DROPDOWN MENU MODAL --- */}
-      <Modal visible={menuVisible} transparent animationType="fade">
-        <TouchableWithoutFeedback onPress={() => setMenuVisible(false)}>
-          <View style={styles.modalOverlay}>
-            <View style={styles.dropdownMenu}>
-
-              {!isDuplicate && (
-                <>
-                  <MenuOption icon="search-outline" label="All Properties" route="/allproperties" />
-                  {profile?.role === "landlord" && (
-                    <>
-                      <MenuOption icon="business-outline" label="My Properties" route="/landlordproperties" />
-                      <MenuOption icon="calendar-outline" label="Schedule" route="/schedule" />
-                      <MenuOption icon="list-outline" label="Bookings" route="/bookings" />
-                    </>
-                  )}
-                  {profile?.role === "tenant" && (
-                    <>
-                      <MenuOption icon="list-outline" label="My Applications" route="/applications" />
-                      <MenuOption icon="calendar-outline" label="Bookings" route="/bookings" />
-                    </>
-                  )}
-                  <MenuOption icon="hammer-outline" label="Maintenance" route="/maintenance" />
-                  <MenuOption icon="card-outline" label="Payments" route="/payments" />
-                  <View style={styles.divider} />
-                </>
-              )}
-
-              <MenuOption icon="log-out-outline" label="Log Out" isLogout />
-            </View>
-          </View>
-        </TouchableWithoutFeedback>
-      </Modal>
-
     </SafeAreaView>
   );
 }
@@ -264,16 +270,13 @@ const styles = StyleSheet.create({
   },
   logoImage: { width: 36, height: 36, borderRadius: 10 },
   brandName: { fontSize: 20, fontWeight: '900', color: '#111', letterSpacing: -0.5 },
-  greeting: { fontSize: 14, color: "#666" },
-  username: { fontSize: 24, fontWeight: "bold" },
-  profileBtn: {
+  notificationBtn: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: "black",
+    backgroundColor: "#f5f5f5",
     justifyContent: "center",
     alignItems: "center",
-    overflow: 'hidden',
   },
   avatarImage: { width: 40, height: 40, borderRadius: 20 },
   avatarText: { color: "white", fontSize: 16, fontWeight: "bold" },

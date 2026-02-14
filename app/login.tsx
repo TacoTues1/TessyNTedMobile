@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -10,7 +10,10 @@ import RegisterForm from '../components/auth/RegisterForm';
 
 export default function AuthScreen() {
     const router = useRouter();
-    const [view, setView] = useState<'login' | 'register' | 'otp'>('login');
+    const { initialView } = useLocalSearchParams<{ initialView: string }>();
+    const [view, setView] = useState<'login' | 'register' | 'otp'>(
+        (initialView === 'register' || initialView === 'otp') ? initialView : 'login'
+    );
     const [loading, setLoading] = useState(false);
     const [pendingEmail, setPendingEmail] = useState('');
     const [pendingMetaData, setPendingMetaData] = useState({});

@@ -33,6 +33,10 @@ export default function LandlordDashboard({ session, profile }: any) {
 
     // Dashboard Data
     const [tasks, setTasks] = useState({ maintenance: [], payments: [] });
+    // Count States for Badges
+    const [pendingBookingsCount, setPendingBookingsCount] = useState(0);
+    const [pendingMaintenanceCount, setPendingMaintenanceCount] = useState(0);
+    const [pendingPaymentsCount, setPendingPaymentsCount] = useState(0);
     const [pendingEndRequests, setPendingEndRequests] = useState<any[]>([]);
     const [pendingRenewalRequests, setPendingRenewalRequests] = useState<any[]>([]);
     const [occupancies, setOccupancies] = useState<any[]>([]);
@@ -214,6 +218,28 @@ export default function LandlordDashboard({ session, profile }: any) {
             maintenance: maint?.map(m => ({ ...m, property_title: propMap[m.property_id] })) as any || [],
             payments: payments?.map(p => ({ ...p, property_title: propMap[p.property_id] })) as any || []
         });
+
+        // Fetch Counts for Badges
+        const { count: bookingCount } = await supabase
+            .from('bookings')
+            .select('*', { count: 'exact', head: true })
+            .in('property_id', propIds)
+            .eq('status', 'pending');
+        setPendingBookingsCount(bookingCount || 0);
+
+        const { count: maintCount } = await supabase
+            .from('maintenance_requests')
+            .select('*', { count: 'exact', head: true })
+            .in('property_id', propIds)
+            .in('status', ['pending', 'in_progress']);
+        setPendingMaintenanceCount(maintCount || 0);
+
+        const { count: payCount } = await supabase
+            .from('payment_requests')
+            .select('*', { count: 'exact', head: true })
+            .in('property_id', propIds)
+            .in('status', ['pending', 'pending_confirmation']);
+        setPendingPaymentsCount(payCount || 0);
     }
 
     async function loadScheduledViewings() {
@@ -662,21 +688,10 @@ export default function LandlordDashboard({ session, profile }: any) {
             </View>
 
             {/* --- MESSAGE TENANTS BUTTON --- */}
-            <TouchableOpacity onPress={openEmailModal} style={styles.messageTenantsBtnFull}>
-                <View style={styles.messageTenantsBtnInner}>
-                    <View style={styles.messageTenantsBtnIconCircle}>
-                        <Ionicons name="chatbubbles" size={18} color="white" />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                        <Text style={styles.messageTenantsBtnTitle}>Message Tenants</Text>
-                        <Text style={styles.messageTenantsBtnSub}>Send notifications to your tenants via SMS & Email</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
-                </View>
-            </TouchableOpacity>
+            {/* Removed as it is now in Quick Actions */}
 
             {/* --- METRICS GRID --- */}
-            <View style={styles.gridContainer}>
+            <View style={[styles.gridContainer, { marginTop: 10 }]}>
                 {/* Properties */}
                 <View style={styles.metricCard}>
                     <View style={[styles.iconBox, { backgroundColor: '#f3f4f6' }]}>
@@ -707,7 +722,7 @@ export default function LandlordDashboard({ session, profile }: any) {
                         <Ionicons name="alert-circle-outline" size={20} color="#e11d48" />
                     </View>
                     <Text style={styles.metricValue}>
-                        {pendingEndRequests.length + pendingRenewalRequests.length + tasks.maintenance.length + tasks.payments.length}
+                        {pendingEndRequests.length + pendingRenewalRequests.length + pendingMaintenanceCount + pendingPaymentsCount + pendingBookingsCount}
                     </Text>
                     <Text style={styles.metricLabel}>Pending</Text>
                 </View>
@@ -737,57 +752,32 @@ export default function LandlordDashboard({ session, profile }: any) {
                 </View>
             </View>
 
-            {/* --- ACTION CENTER --- */}
+            {/* --- QUICK ACTIONS --- */}
             <View style={styles.sectionContainer}>
-                <Text style={styles.sectionTitle}>Action Center</Text>
-
-                {/* Move Out Requests */}
-                {pendingEndRequests.map(req => (
-                    <View key={req.id} style={[styles.actionCard, { borderColor: '#ffedd5', backgroundColor: '#fff7ed' }]}>
-                        <View style={{ flex: 1 }}>
-                            <View style={[styles.badge, { backgroundColor: '#fdba74' }]}><Text style={styles.badgeText}>MOVE-OUT</Text></View>
-                            <Text style={styles.actionTitle}>{req.property?.title}</Text>
-                            <Text style={styles.actionSub}>{req.tenant?.first_name} {req.tenant?.last_name}</Text>
-                        </View>
-                        <TouchableOpacity onPress={() => approveEndRequest(req.id)} style={styles.btnSmallBlack}>
-                            <Text style={styles.btnTextWhite}>Approve</Text>
+                <Text style={styles.sectionTitle}>Quick Actions</Text>
+                <View style={styles.quickGrid}>
+                    {[
+                        { label: 'All Properties', icon: 'business-outline', action: () => router.push('/(tabs)/allproperties' as any), badge: 0 },
+                        { label: 'My Properties', icon: 'home-outline', action: () => router.push('/(tabs)/landlordproperties' as any), badge: 0 },
+                        { label: 'Schedule', icon: 'calendar-outline', action: () => router.push('/(tabs)/schedule' as any), badge: scheduledViewings.length },
+                        { label: 'Bookings', icon: 'people-outline', action: () => router.push('/(tabs)/bookings' as any), badge: pendingBookingsCount },
+                        { label: 'Maintenance', icon: 'hammer-outline', action: () => router.push('/(tabs)/maintenance' as any), badge: pendingMaintenanceCount },
+                        { label: 'Payments', icon: 'card-outline', action: () => router.push('/(tabs)/payments' as any), badge: pendingPaymentsCount },
+                    ].map((item, index) => (
+                        <TouchableOpacity key={index} style={styles.quickBtn} onPress={item.action}>
+                            <View style={styles.quickBtnIcon}>
+                                <Ionicons name={item.icon as any} size={24} color="#dc2626" />
+                                {item.badge > 0 && (
+                                    <View style={styles.quickBtnBadge}>
+                                        <Text style={styles.quickBtnBadgeText}>{item.badge > 99 ? '99+' : item.badge}</Text>
+                                    </View>
+                                )}
+                            </View>
+                            <Text style={styles.quickBtnLabel}>{item.label}</Text>
                         </TouchableOpacity>
-                    </View>
-                ))}
-
-                {/* Renewals */}
-                {pendingRenewalRequests.map(req => (
-                    <View key={req.id} style={[styles.actionCard, { borderColor: '#c7d2fe', backgroundColor: '#eef2ff' }]}>
-                        <View style={{ flex: 1 }}>
-                            <View style={[styles.badge, { backgroundColor: '#818cf8' }]}><Text style={styles.badgeText}>RENEWAL</Text></View>
-                            <Text style={styles.actionTitle}>{req.property?.title}</Text>
-                            <Text style={styles.actionSub}>{req.tenant?.first_name}</Text>
-                        </View>
-                        <TouchableOpacity onPress={() => openRenewalModal(req, 'approve')} style={styles.btnSmallBlack}>
-                            <Text style={styles.btnTextWhite}>Review</Text>
-                        </TouchableOpacity>
-                    </View>
-                ))}
-
-                <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
-                    <TouchableOpacity style={[styles.actionQuickCard, { flex: 1 }]} onPress={() => router.push('/(tabs)/maintenance' as any)}>
-                        <View style={[styles.actionQuickIcon, { backgroundColor: '#fef3c7' }]}>
-                            <Ionicons name="hammer-outline" size={20} color="#b45309" />
-                        </View>
-                        <Text style={styles.actionQuickLabel}>Maintenance</Text>
-                        <Text style={styles.actionQuickCount}>{tasks.maintenance.length}</Text>
-                        <Ionicons name="chevron-forward" size={16} color="#ccc" />
-                    </TouchableOpacity>
-                    <TouchableOpacity style={[styles.actionQuickCard, { flex: 1 }]} onPress={() => router.push('/(tabs)/payments' as any)}>
-                        <View style={[styles.actionQuickIcon, { backgroundColor: '#dbeafe' }]}>
-                            <Ionicons name="card-outline" size={20} color="#2563eb" />
-                        </View>
-                        <Text style={styles.actionQuickLabel}>Payments</Text>
-                        <Text style={styles.actionQuickCount}>{tasks.payments.length}</Text>
-                        <Ionicons name="chevron-forward" size={16} color="#ccc" />
-                    </TouchableOpacity>
+                    ))}
                 </View>
-            </View>
+            </View>           
 
             {/* --- BILLING SCHEDULE --- */}
             <View style={styles.sectionContainer}>
@@ -1473,4 +1463,56 @@ const styles = StyleSheet.create({
         gap: 10,
     },
     emailSendBtnText: { color: 'white', fontSize: 16, fontWeight: '700' },
+
+    // Quick Actions
+    quickGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'space-between',
+        rowGap: 20,
+    },
+    quickBtn: {
+        width: '30%', // 3 items per row approx
+        alignItems: 'center',
+        gap: 8,
+    },
+    quickBtnIcon: {
+        width: 56,
+        height: 56,
+        borderRadius: 20,
+        backgroundColor: '#fff',
+        alignItems: 'center',
+        justifyContent: 'center',
+        shadowColor: '#000',
+        shadowOpacity: 0.05,
+        shadowRadius: 10,
+        elevation: 2,
+        borderWidth: 1,
+        borderColor: '#f3f4f6',
+    },
+    quickBtnLabel: {
+        fontSize: 11,
+        fontWeight: '600',
+        color: '#4b5563',
+        textAlign: 'center',
+    },
+    quickBtnBadge: {
+        position: 'absolute',
+        top: -5,
+        right: -5,
+        backgroundColor: '#ef4444',
+        borderRadius: 10,
+        minWidth: 20,
+        height: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 4,
+        borderWidth: 1.5,
+        borderColor: 'white',
+    },
+    quickBtnBadgeText: {
+        color: 'white',
+        fontSize: 10,
+        fontWeight: 'bold',
+    },
 });

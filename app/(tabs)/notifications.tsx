@@ -200,7 +200,13 @@ export default function NotificationsPage() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <Text style={styles.title}>Notifications</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.replace('/(tabs)' as any)}>
+            <Ionicons name="arrow-back" size={24} color="black" />
+          </TouchableOpacity>
+          <Text style={styles.title}>Notifications</Text>
+        </View>
+
         {notifications.some(n => !n.read) && (
           <TouchableOpacity onPress={markAllAsRead}>
             <Text style={styles.markReadText}>Mark all read</Text>

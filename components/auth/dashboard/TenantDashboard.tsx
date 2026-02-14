@@ -514,13 +514,24 @@ export default function TenantDashboard({ session, profile }: any) {
 
     const checkPendingReviews = async () => {
         if (!session?.user) return;
-        const { data: ended } = await supabase.from('tenant_occupancies').select('*, property:properties(title, id, address, city)').eq('tenant_id', session.user.id).eq('status', 'ended');
-        const { data: reviews } = await supabase.from('reviews').select('occupancy_id').eq('user_id', session.user.id);
-        const reviewedIds = reviews?.map((r: any) => r.occupancy_id) || [];
-        const dismissedStr = await AsyncStorage.getItem('dismissedReviews');
-        const dismissedReviews = dismissedStr ? JSON.parse(dismissedStr) : [];
-        const unreviewed = ended?.find((o: any) => !reviewedIds.includes(o.id) && !dismissedReviews.includes(o.id));
-        if (unreviewed) { setReviewTarget(unreviewed); setReviewModalVisible(true); }
+        try {
+            const { data: ended } = await supabase.from('tenant_occupancies').select('*, property:properties(title, id, address, city)').eq('tenant_id', session.user.id).eq('status', 'ended');
+            const { data: reviews } = await supabase.from('reviews').select('occupancy_id').eq('user_id', session.user.id);
+            const reviewedIds = reviews?.map((r: any) => r.occupancy_id) || [];
+
+            const dismissedStr = await AsyncStorage.getItem('dismissedReviews');
+            const dismissedReviews = dismissedStr ? JSON.parse(dismissedStr) : [];
+            const dismissedStrings = dismissedReviews.map((id: any) => String(id));
+
+            const unreviewed = ended?.find((o: any) => !reviewedIds.includes(o.id) && !dismissedStrings.includes(String(o.id)));
+
+            if (unreviewed) {
+                setReviewTarget(unreviewed);
+                setReviewModalVisible(true);
+            }
+        } catch (e) {
+            console.error("Error checking pending reviews:", e);
+        }
     };
 
     const submitReview = async () => {
@@ -541,11 +552,14 @@ export default function TenantDashboard({ session, profile }: any) {
             try {
                 const dismissedStr = await AsyncStorage.getItem('dismissedReviews');
                 const dismissed = dismissedStr ? JSON.parse(dismissedStr) : [];
-                if (!dismissed.includes(reviewTarget.id)) {
-                    // Update array and save back to storage
-                    const newDismissed = [...dismissed, reviewTarget.id];
+                // Ensure array of strings
+                const dismissedStrings = dismissed.map((id: any) => String(id));
+                const targetId = String(reviewTarget.id);
+
+                if (!dismissedStrings.includes(targetId)) {
+                    const newDismissed = [...dismissedStrings, targetId];
                     await AsyncStorage.setItem('dismissedReviews', JSON.stringify(newDismissed));
-                    console.log("Saved dismissed review:", reviewTarget.id, newDismissed);
+                    console.log("Saved dismissed review:", targetId, newDismissed);
                 }
             } catch (e) {
                 console.error("Failed to save dismissed review preference", e);
