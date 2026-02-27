@@ -13,8 +13,15 @@ import {
   StyleSheet, Text, TextInput, TouchableOpacity,
   View
 } from 'react-native';
-import MapView, { Marker } from 'react-native-maps';
 import { supabase } from '../../lib/supabase';
+// MapView cannot be imported directly on web without extra config.
+let MapView: any;
+let Marker: any;
+if (Platform.OS !== 'web') {
+  const Maps = require('react-native-maps');
+  MapView = Maps.default;
+  Marker = Maps.Marker;
+}
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || '';
 
@@ -42,6 +49,7 @@ export default function PropertyDetail() {
   const [selectedSlotId, setSelectedSlotId] = useState('');
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [bookingNote, setBookingNote] = useState('');
+  const [calendarMonthOffset, setCalendarMonthOffset] = useState(0);
 
   // Modals
   const [showGalleryModal, setShowGalleryModal] = useState(false);
@@ -545,30 +553,35 @@ export default function PropertyDetail() {
                 </TouchableOpacity>
               </View>
 
-              {/* Map View */}
               <View style={styles.mapContainer}>
-                {property.location_link || (property.latitude && property.longitude) ? (
-                  <MapView
-                    style={StyleSheet.absoluteFillObject}
-                    initialRegion={{
-                      latitude: property.latitude || extractCoordinates(property.location_link)?.lat || 10.3157,
-                      longitude: property.longitude || extractCoordinates(property.location_link)?.lng || 123.8854,
-                      latitudeDelta: 0.01,
-                      longitudeDelta: 0.01,
-                    }}
-                    scrollEnabled={false}
-                  >
-                    <Marker
-                      coordinate={{
-                        latitude: property.latitude || extractCoordinates(property.location_link)?.lat || 10.3157,
-                        longitude: property.longitude || extractCoordinates(property.location_link)?.lng || 123.8854,
+                {(() => {
+                  if (!(property.location_link || (property.latitude && property.longitude)) || Platform.OS === 'web' || !MapView) {
+                    return <View style={styles.center}><Text style={{ color: '#666' }}>Map not available on this platform</Text></View>;
+                  }
+
+                  const mapCoords = (property.latitude && property.longitude)
+                    ? { lat: property.latitude, lng: property.longitude }
+                    : extractCoordinates(property.location_link);
+
+                  const finalCoords = {
+                    latitude: mapCoords?.lat || 10.3157,
+                    longitude: mapCoords?.lng || 123.8854,
+                  };
+
+                  return (
+                    <MapView
+                      style={StyleSheet.absoluteFillObject}
+                      initialRegion={{
+                        ...finalCoords,
+                        latitudeDelta: 0.01,
+                        longitudeDelta: 0.01,
                       }}
-                      title={property.title}
-                    />
-                  </MapView>
-                ) : (
-                  <View style={styles.center}><Text style={{ color: '#666' }}>Map not available</Text></View>
-                )}
+                      scrollEnabled={false}
+                    >
+                      <Marker coordinate={finalCoords} title={property.title} />
+                    </MapView>
+                  );
+                })()}
               </View>
               <View style={styles.mapFooter}>
                 <Text style={{ fontSize: 12, color: '#666', flex: 1 }} numberOfLines={1}>{property.address}, {property.city}</Text>
@@ -771,9 +784,12 @@ export default function PropertyDetail() {
                 });
 
                 const today = new Date();
-                const year = today.getFullYear();
-                const month = today.getMonth();
+                const viewDate = new Date();
+                viewDate.setMonth(viewDate.getMonth() + calendarMonthOffset);
+                const year = viewDate.getFullYear();
+                const month = viewDate.getMonth();
                 const daysInMonth = new Date(year, month + 1, 0).getDate();
+                const firstDay = new Date(year, month, 1).getDay();
 
                 const selectedSlotData = timeSlots.find(s => s.id === selectedSlotId);
                 const selectedDateKey = selectedSlotData
@@ -783,19 +799,26 @@ export default function PropertyDetail() {
                 return (
                   <View style={styles.calendarContainer}>
                     <View style={styles.calendarHeader}>
-                      <Text style={styles.monthName}>{today.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</Text>
+                      <TouchableOpacity onPress={() => setCalendarMonthOffset(prev => prev - 1)} style={{ padding: 5 }}>
+                        <Ionicons name="chevron-back" size={20} color="#333" />
+                      </TouchableOpacity>
+                      <Text style={styles.monthName}>{viewDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</Text>
+                      <TouchableOpacity onPress={() => setCalendarMonthOffset(prev => prev + 1)} style={{ padding: 5 }}>
+                        <Ionicons name="chevron-forward" size={20} color="#333" />
+                      </TouchableOpacity>
                     </View>
                     <View style={styles.weekRow}>
                       {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => <Text key={i} style={styles.weekDay}>{d}</Text>)}
                     </View>
                     <View style={styles.daysGrid}>
+                      {Array.from({ length: firstDay }).map((_, i) => <View key={`empty-${i}`} style={styles.dayCell} />)}
                       {Array.from({ length: daysInMonth }).map((_, i) => {
                         const day = i + 1;
                         const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const dateObj = new Date(year, month, day);
                         const hasSlots = !!slotsByDate[dateKey];
                         const isSelected = selectedDateKey === dateKey;
-                        const isPast = dateObj < new Date(new Date().setHours(0, 0, 0, 0));
+                        const isPast = dateObj < new Date(today.setHours(0, 0, 0, 0));
 
                         return (
                           <TouchableOpacity
@@ -997,7 +1020,7 @@ const styles = StyleSheet.create({
 
   // Calendar
   calendarContainer: { backgroundColor: 'white', borderRadius: 8, padding: 10, marginBottom: 10 },
-  calendarHeader: { alignItems: 'center', marginBottom: 10 },
+  calendarHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   monthName: { fontWeight: 'bold', fontSize: 14 },
   weekRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
   weekDay: { width: 30, textAlign: 'center', fontSize: 10, fontWeight: 'bold', color: '#ccc' },

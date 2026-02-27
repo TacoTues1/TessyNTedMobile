@@ -1,11 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
     Dimensions, Image, Modal,
+    Platform,
     RefreshControl,
     ScrollView,
     StyleSheet, Text, TextInput, TouchableOpacity, View
@@ -14,6 +16,45 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../../lib/supabase';
 
 const { width } = Dimensions.get('window');
+
+let MapView: any = null;
+let Marker: any = null;
+let Circle: any = null;
+if (Platform.OS !== 'web') {
+    const Maps = require('react-native-maps');
+    MapView = Maps.default;
+    Marker = Maps.Marker;
+    Circle = Maps.Circle;
+}
+
+// --- Distance Calculation Helper ---
+function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+    const R = 6371; // Radius of the earth in km
+    const dLat = deg2rad(lat2 - lat1);
+    const dLon = deg2rad(lon2 - lon1);
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c; // Distance in km
+}
+
+function deg2rad(deg: number) {
+    return deg * (Math.PI / 180);
+}
+
+const extractCoordinates = (link: string | null) => {
+    if (!link) return null;
+    const atMatch = link.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+    const qMatch = link.match(/[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)/);
+    const placeMatch = link.match(/place\/(-?\d+\.\d+),(-?\d+\.\d+)/);
+    const match = atMatch || qMatch || placeMatch;
+    if (match) {
+        return { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
+    }
+    return null;
+};
 
 export default function AllProperties() {
     const router = useRouter();
@@ -32,6 +73,8 @@ export default function AllProperties() {
     const [minRating, setMinRating] = useState(0);
     const [filterMostFavorite, setFilterMostFavorite] = useState(false);
     const [sortBy, setSortBy] = useState('newest');
+    const [filterNearMe, setFilterNearMe] = useState(false);
+    const [userLocation, setUserLocation] = useState<any>(null);
 
     // Comparison & Favorites
     const [comparisonList, setComparisonList] = useState<any[]>([]);
@@ -40,6 +83,8 @@ export default function AllProperties() {
 
     // UI State
     const [showFilterModal, setShowFilterModal] = useState(false);
+    const [showMapView, setShowMapView] = useState(false);
+    const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
 
     const availableAmenities = [
         'Wifi', 'Air Condition', 'Washing Machine', 'Parking',
@@ -142,12 +187,46 @@ export default function AllProperties() {
         );
     };
 
+    const handleToggleNearMe = async () => {
+        if (filterNearMe) {
+            setFilterNearMe(false);
+            setUserLocation(null);
+            setShowMapView(false);
+        } else {
+            setLoading(true);
+            try {
+                let { status } = await Location.requestForegroundPermissionsAsync();
+                if (status !== 'granted') {
+                    Alert.alert('Permission Denied', 'Please enable location services to use this feature.');
+                    setLoading(false);
+                    return;
+                }
+
+                let location = await Location.getCurrentPositionAsync({});
+                setUserLocation({
+                    latitude: location.coords.latitude,
+                    longitude: location.coords.longitude
+                });
+                setFilterNearMe(true);
+                setShowMapView(true);
+            } catch (error) {
+                console.error("Geolocation error:", error);
+                Alert.alert('Error', 'Could not get your location. Please check your device settings.');
+            } finally {
+                setLoading(false);
+            }
+        }
+    };
+
     const clearFilters = () => {
         setPriceRange({ min: '', max: '' });
         setSelectedAmenities([]);
         setMinRating(0);
         setFilterMostFavorite(false);
         setSortBy('newest');
+        setFilterNearMe(false);
+        setUserLocation(null);
+        setShowMapView(false);
     };
 
     // --- FILTERING LOGIC ---
@@ -170,6 +249,20 @@ export default function AllProperties() {
 
             if (minRating > 0 && (stats.avg_rating || 0) < minRating) return false;
             if (filterMostFavorite && (stats.favorite_count || 0) < 1) return false;
+
+            if (filterNearMe && userLocation) {
+                const coords = (item.latitude && item.longitude)
+                    ? { lat: item.latitude, lng: item.longitude }
+                    : extractCoordinates(item.location_link);
+                if (!coords || !coords.lat || !coords.lng) return false;
+                const dist = getDistanceFromLatLonInKm(
+                    userLocation.latitude,
+                    userLocation.longitude,
+                    coords.lat,
+                    coords.lng
+                );
+                if (dist > 1) return false; // within 1km
+            }
 
             return true;
         }).sort((a, b) => {
@@ -322,9 +415,15 @@ export default function AllProperties() {
             </View>
 
             {/* Active Filters */}
-            {(selectedAmenities.length > 0 || minRating > 0 || filterMostFavorite) && (
+            {(selectedAmenities.length > 0 || minRating > 0 || filterMostFavorite || filterNearMe) && (
                 <View style={{ height: 50 }}>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 20, alignItems: 'center', gap: 8 }}>
+                        {filterNearMe && (
+                            <View style={styles.activeFilterChip}>
+                                <Text style={styles.activeFilterText}>📍 Near Me &lt;1km</Text>
+                                <TouchableOpacity onPress={() => handleToggleNearMe()}><Ionicons name="close" size={12} color="white" /></TouchableOpacity>
+                            </View>
+                        )}
                         {filterMostFavorite && (
                             <View style={styles.activeFilterChip}>
                                 <Text style={styles.activeFilterText}>♥ Guest Favorites</Text>
@@ -353,9 +452,92 @@ export default function AllProperties() {
             {/* Main Content */}
             {loading ? (
                 <View style={styles.center}><ActivityIndicator size="large" color="black" /></View>
+            ) : showMapView && filterNearMe && Platform.OS !== 'web' && MapView ? (
+                <View style={{ flex: 1 }}>
+                    <MapView
+                        style={StyleSheet.absoluteFillObject}
+                        initialRegion={userLocation ? {
+                            latitude: userLocation.latitude,
+                            longitude: userLocation.longitude,
+                            latitudeDelta: filterNearMe ? 0.03 : 0.05,
+                            longitudeDelta: filterNearMe ? 0.03 : 0.05,
+                        } : {
+                            latitude: 10.3157, // Default Cebu City
+                            longitude: 123.8854,
+                            latitudeDelta: 0.1,
+                            longitudeDelta: 0.1,
+                        }}
+                    >
+                        {filteredData.map((item, index) => {
+                            const coords = (item.latitude && item.longitude)
+                                ? { lat: item.latitude, lng: item.longitude }
+                                : extractCoordinates(item.location_link);
+                            if (!coords || !coords.lat || !coords.lng) return null;
+
+                            // Offset markers slightly if they are at the exact same location
+                            let matches = 0;
+                            for (let i = 0; i < index; i++) {
+                                const otherItem = filteredData[i];
+                                const otherCoords = (otherItem.latitude && otherItem.longitude)
+                                    ? { lat: otherItem.latitude, lng: otherItem.longitude }
+                                    : extractCoordinates(otherItem.location_link);
+                                if (otherCoords && Math.abs(otherCoords.lat - coords.lat) < 0.00001 && Math.abs(otherCoords.lng - coords.lng) < 0.00001) {
+                                    matches++;
+                                }
+                            }
+                            const jitterOffset = 0.00015; // Approx 15 meters offset
+                            const angle = matches * (Math.PI / 4); // Spread in 45-degree increments
+                            const adjustedLat = coords.lat + (matches > 0 ? jitterOffset * Math.sin(angle) : 0);
+                            const adjustedLng = coords.lng + (matches > 0 ? jitterOffset * Math.cos(angle) : 0);
+
+                            return (
+                                <Marker
+                                    key={`marker-${item.id}`}
+                                    coordinate={{ latitude: adjustedLat, longitude: adjustedLng }}
+                                    title={item.title}
+                                    description={`₱${(item.price || 0).toLocaleString()} /mo`}
+                                    onPress={() => setSelectedPropertyId(item.id)}
+                                >
+                                    <View style={[styles.mapMarker, selectedPropertyId === item.id && styles.mapMarkerSelected]}>
+                                        <Text style={[styles.mapMarkerText, selectedPropertyId === item.id && { color: 'white' }]}>
+                                            ₱{item.price >= 1000 ? (item.price / 1000).toFixed(1) + 'k' : item.price}
+                                        </Text>
+                                    </View>
+                                </Marker>
+                            );
+                        })}
+
+                        {/* Blue Circle for "Near Me" (1km radius is 1000 meters) */}
+                        {filterNearMe && userLocation && Circle && (
+                            <Circle
+                                center={userLocation}
+                                radius={1000}
+                                fillColor="rgba(59, 130, 246, 0.2)"
+                                strokeColor="rgba(59, 130, 246, 0.5)"
+                                strokeWidth={1}
+                            />
+                        )}
+                        {/* Current Location Marker */}
+                        {userLocation && (
+                            <Marker coordinate={userLocation} title="You are here">
+                                <View style={styles.userLocationMarker}>
+                                    <View style={styles.userLocationDot} />
+                                </View>
+                            </Marker>
+                        )}
+                    </MapView>
+
+                    {/* Selected Property Card Overlay */}
+                    {selectedPropertyId && (
+                        <View style={styles.mapCardOverlay}>
+                            {filteredData.find(p => p.id === selectedPropertyId) &&
+                                renderCard(filteredData.find(p => p.id === selectedPropertyId))}
+                        </View>
+                    )}
+                </View>
             ) : (
                 <ScrollView
-                    contentContainerStyle={{ padding: 20, paddingBottom: 30 }}
+                    contentContainerStyle={{ padding: 20, paddingBottom: 100 }}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadProperties(session?.user?.id)} />}
                 >
                     {filteredData.map(renderCard)}
@@ -369,6 +551,19 @@ export default function AllProperties() {
                         </View>
                     )}
                 </ScrollView>
+            )}
+
+            {/* Map/List Toggle Float Button */}
+            {!loading && filterNearMe && (
+                <TouchableOpacity
+                    style={styles.mapToggleBtn}
+                    onPress={() => setShowMapView(!showMapView)}
+                >
+                    <Ionicons name={showMapView ? "list" : "map"} size={20} color="white" style={{ marginRight: 8 }} />
+                    <Text style={{ color: 'white', fontWeight: 'bold' }}>
+                        {showMapView ? 'List View' : 'Map View'}
+                    </Text>
+                </TouchableOpacity>
             )}
 
             {/* Comparison Floating Button */}
@@ -417,6 +612,13 @@ export default function AllProperties() {
                             <TouchableOpacity onPress={() => setFilterMostFavorite(!filterMostFavorite)} style={[styles.chip, filterMostFavorite && styles.chipActive]}>
                                 <Ionicons name="heart" size={14} color={filterMostFavorite ? 'white' : 'black'} style={{ marginRight: 4 }} />
                                 <Text style={[styles.chipText, filterMostFavorite && { color: 'white' }]}>Guest Favorites</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={() => {
+                                setShowFilterModal(false);
+                                handleToggleNearMe();
+                            }} style={[styles.chip, filterNearMe && styles.chipActive]}>
+                                <Ionicons name="location" size={14} color={filterNearMe ? 'white' : 'black'} style={{ marginRight: 4 }} />
+                                <Text style={[styles.chipText, filterNearMe && { color: 'white' }]}>Find Near Me</Text>
                             </TouchableOpacity>
                         </View>
 
@@ -534,8 +736,19 @@ const styles = StyleSheet.create({
     emptySubtitle: { fontSize: 14, color: '#9ca3af', marginTop: 4, textAlign: 'center' },
 
     // Floating Compare Button
-    compareFloatBtn: { position: 'absolute', bottom: 30, alignSelf: 'center', backgroundColor: '#111', flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 24, borderRadius: 30, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 10, elevation: 10, zIndex: 100 },
+    compareFloatBtn: { position: 'absolute', bottom: 90, alignSelf: 'center', backgroundColor: '#111', flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 24, borderRadius: 30, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 10, elevation: 10, zIndex: 100 },
     compareCount: { backgroundColor: '#ef4444', width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center', position: 'absolute', top: -5, right: -5, borderWidth: 2, borderColor: '#111' },
+
+    // Map Toggle Button
+    mapToggleBtn: { position: 'absolute', bottom: 30, alignSelf: 'center', backgroundColor: '#2563eb', flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 24, borderRadius: 30, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 10, elevation: 10, zIndex: 100 },
+
+    // Map Markers & Overlay
+    mapMarker: { backgroundColor: 'white', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 4, elevation: 4, borderWidth: 1, borderColor: '#eee' },
+    mapMarkerSelected: { backgroundColor: '#111', borderColor: '#111' },
+    mapMarkerText: { fontSize: 11, fontWeight: 'bold', color: '#111' },
+    userLocationMarker: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+    userLocationDot: { width: 16, height: 16, borderRadius: 8, backgroundColor: '#3b82f6', borderWidth: 3, borderColor: 'white', shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 4, elevation: 4 },
+    mapCardOverlay: { position: 'absolute', bottom: 90, left: 10, right: 10, zIndex: 50 },
 
     // Filter Modal
     modalContainer: { flex: 1, backgroundColor: 'white' },

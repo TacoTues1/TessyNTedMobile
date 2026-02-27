@@ -1,17 +1,19 @@
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { 
-  Alert, StyleSheet, Text, TouchableOpacity, View, Modal, Platform 
+import {
+  Alert,
+  Modal, Platform,
+  StyleSheet, Text, TouchableOpacity, View
 } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import AuthInput from './AuthInput';
-import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
 // Import DateTimePicker AND the Android Helper
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 
-export default function RegisterForm({ onSwitchToLogin, onRegisterSuccess, loading, setLoading }: any) {
+export default function RegisterForm({ onSwitchToLogin, onSwitchToLandlord, onRegisterSuccess, loading, setLoading }: any) {
   const router = useRouter();
-  
+
   // Form State
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -21,18 +23,18 @@ export default function RegisterForm({ onSwitchToLogin, onRegisterSuccess, loadi
   const [confirmPassword, setConfirmPassword] = useState('');
   const [phone, setPhone] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  
+
   // -- BIRTHDAY & GENDER --
   const [birthday, setBirthday] = useState<Date | null>(null);
   const [gender, setGender] = useState('');
-  
+
   // UI State
   const [showIOSPicker, setShowIOSPicker] = useState(false); // Only for iOS Modal
   const [showGenderModal, setShowGenderModal] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
 
   // --- Date Picker Logic (Robust) ---
-  
+
   const openDatePicker = () => {
     if (Platform.OS === 'android') {
       // ANDROID: Use Imperative API
@@ -97,9 +99,9 @@ export default function RegisterForm({ onSwitchToLogin, onRegisterSuccess, loadi
         email,
         password,
         options: {
-          data: { 
-            first_name: firstName, 
-            middle_name: middleName || 'N/A', 
+          data: {
+            first_name: firstName,
+            middle_name: middleName || 'N/A',
             last_name: lastName,
             birthday: formattedBirthday,
             gender: gender,
@@ -132,102 +134,102 @@ export default function RegisterForm({ onSwitchToLogin, onRegisterSuccess, loadi
           <AuthInput label="Last Name *" value={lastName} onChangeText={setLastName} placeholder="Dela Cruz" />
         </View>
       </View>
-      
+
       <AuthInput label="Middle Name (Optional)" value={middleName} onChangeText={setMiddleName} placeholder="Santos" />
-      
+
       {/* --- BIRTHDAY & GENDER ROW --- */}
       <View style={styles.row}>
-        
+
         {/* Birthday Picker */}
         <View style={{ flex: 1, marginRight: 5, marginBottom: 15 }}>
-           <Text style={styles.inputLabel}>Birthday *</Text>
-           <TouchableOpacity 
-             style={styles.inputLike} 
-             onPress={openDatePicker}
-           >
-             <Text style={birthday ? styles.inputText : styles.placeholderText}>
-               {birthday ? birthday.toISOString().split('T')[0] : 'YYYY-MM-DD'}
-             </Text>
-             <Ionicons name="calendar-outline" size={18} color="#666" />
-           </TouchableOpacity>
+          <Text style={styles.inputLabel}>Birthday *</Text>
+          <TouchableOpacity
+            style={styles.inputLike}
+            onPress={openDatePicker}
+          >
+            <Text style={birthday ? styles.inputText : styles.placeholderText}>
+              {birthday ? birthday.toISOString().split('T')[0] : 'YYYY-MM-DD'}
+            </Text>
+            <Ionicons name="calendar-outline" size={18} color="#666" />
+          </TouchableOpacity>
 
-           {/* iOS ONLY: Modal Picker */}
-           {showIOSPicker && (
-              <Modal transparent animationType="fade" visible={true}>
-                 <View style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
-                       <View style={styles.modalHeader}>
-                          <Text style={styles.modalTitle}>Select Birthday</Text>
-                          <TouchableOpacity onPress={confirmIOSDate}>
-                             <Text style={{color: '#2563eb', fontWeight: 'bold', fontSize: 16}}>Done</Text>
-                          </TouchableOpacity>
-                       </View>
-                       <DateTimePicker
-                         value={birthday || new Date()}
-                         mode="date"
-                         display="spinner"
-                         onChange={onIOSDateChange}
-                         maximumDate={new Date()}
-                         textColor="black" // Explicit text color for dark mode
-                       />
-                    </View>
-                 </View>
-              </Modal>
-           )}
+          {/* iOS ONLY: Modal Picker */}
+          {showIOSPicker && (
+            <Modal transparent animationType="fade" visible={true}>
+              <View style={styles.modalOverlay}>
+                <View style={styles.modalContent}>
+                  <View style={styles.modalHeader}>
+                    <Text style={styles.modalTitle}>Select Birthday</Text>
+                    <TouchableOpacity onPress={confirmIOSDate}>
+                      <Text style={{ color: '#2563eb', fontWeight: 'bold', fontSize: 16 }}>Done</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <DateTimePicker
+                    value={birthday || new Date()}
+                    mode="date"
+                    display="spinner"
+                    onChange={onIOSDateChange}
+                    maximumDate={new Date()}
+                    textColor="black" // Explicit text color for dark mode
+                  />
+                </View>
+              </View>
+            </Modal>
+          )}
         </View>
 
         {/* Gender Dropdown */}
         <View style={{ flex: 1, marginLeft: 5, marginBottom: 15 }}>
-           <Text style={styles.inputLabel}>Gender *</Text>
-           <TouchableOpacity 
-             style={styles.inputLike} 
-             onPress={() => setShowGenderModal(true)}
-           >
-             <Text style={gender ? styles.inputText : styles.placeholderText}>
-               {gender || 'Select'}
-             </Text>
-             <Ionicons name="chevron-down" size={18} color="#666" />
-           </TouchableOpacity>
+          <Text style={styles.inputLabel}>Gender *</Text>
+          <TouchableOpacity
+            style={styles.inputLike}
+            onPress={() => setShowGenderModal(true)}
+          >
+            <Text style={gender ? styles.inputText : styles.placeholderText}>
+              {gender || 'Select'}
+            </Text>
+            <Ionicons name="chevron-down" size={18} color="#666" />
+          </TouchableOpacity>
         </View>
       </View>
 
       <AuthInput label="Phone Number *" value={phone} onChangeText={setPhone} placeholder="09123456789" />
       <AuthInput label="Email *" value={email} onChangeText={setEmail} placeholder="john@example.com" />
-      
-      <AuthInput 
-        label="Password *" 
-        value={password} 
-        onChangeText={setPassword} 
-        secureTextEntry={!showPassword} 
-        isPassword 
-        showPassword={showPassword} 
-        togglePassword={() => setShowPassword(!showPassword)} 
+
+      <AuthInput
+        label="Password *"
+        value={password}
+        onChangeText={setPassword}
+        secureTextEntry={!showPassword}
+        isPassword
+        showPassword={showPassword}
+        togglePassword={() => setShowPassword(!showPassword)}
       />
-       <AuthInput 
-        label="Confirm Password *" 
-        value={confirmPassword} 
-        onChangeText={setConfirmPassword} 
-        secureTextEntry={!showPassword} 
+      <AuthInput
+        label="Confirm Password *"
+        value={confirmPassword}
+        onChangeText={setConfirmPassword}
+        secureTextEntry={!showPassword}
       />
 
       {/* Terms Checkbox */}
       <View style={styles.termsContainer}>
-        <TouchableOpacity 
-            style={styles.checkbox} 
-            onPress={() => setTermsAccepted(!termsAccepted)}
+        <TouchableOpacity
+          style={styles.checkbox}
+          onPress={() => setTermsAccepted(!termsAccepted)}
         >
-            <Ionicons 
-                name={termsAccepted ? "checkbox" : "square-outline"} 
-                size={24} 
-                color={termsAccepted ? "black" : "#ccc"} 
-            />
+          <Ionicons
+            name={termsAccepted ? "checkbox" : "square-outline"}
+            size={24}
+            color={termsAccepted ? "black" : "#ccc"}
+          />
         </TouchableOpacity>
         <View style={styles.termsTextContainer}>
-            <Text style={styles.termsText}>I accept the </Text>
-            <TouchableOpacity onPress={() => router.push('/terms')}>
-                <Text style={styles.termsLink}>Terms & Conditions</Text>
-            </TouchableOpacity>
-            <Text style={styles.termsText}> regarding multiple accounts.</Text>
+          <Text style={styles.termsText}>I accept the </Text>
+          <TouchableOpacity onPress={() => router.push('/terms')}>
+            <Text style={styles.termsLink}>Terms & Conditions</Text>
+          </TouchableOpacity>
+          <Text style={styles.termsText}> regarding multiple accounts.</Text>
         </View>
       </View>
 
@@ -241,27 +243,33 @@ export default function RegisterForm({ onSwitchToLogin, onRegisterSuccess, loadi
           <Text style={styles.linkText}>Sign in</Text>
         </TouchableOpacity>
       </View>
+      <View style={[styles.switchContainer, { marginTop: 10, marginBottom: 20 }]}>
+        <Text>Register as a landlord? </Text>
+        <TouchableOpacity onPress={onSwitchToLandlord}>
+          <Text style={styles.linkText}>Click here</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* --- GENDER SELECTION MODAL --- */}
       <Modal visible={showGenderModal} transparent animationType="fade">
-        <TouchableOpacity 
-          style={styles.modalOverlay} 
-          activeOpacity={1} 
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
           onPress={() => setShowGenderModal(false)}
         >
           <View style={styles.modalContent}>
-            <Text style={[styles.modalTitle, {marginBottom: 15}]}>Select Gender</Text>
+            <Text style={[styles.modalTitle, { marginBottom: 15 }]}>Select Gender</Text>
             {genderOptions.map((option) => (
-              <TouchableOpacity 
-                key={option} 
-                style={styles.modalOption} 
+              <TouchableOpacity
+                key={option}
+                style={styles.modalOption}
                 onPress={() => {
                   setGender(option);
                   setShowGenderModal(false);
                 }}
               >
                 <Text style={[
-                  styles.modalOptionText, 
+                  styles.modalOptionText,
                   gender === option && { fontWeight: 'bold', color: 'black' }
                 ]}>
                   {option}
@@ -269,11 +277,11 @@ export default function RegisterForm({ onSwitchToLogin, onRegisterSuccess, loadi
                 {gender === option && <Ionicons name="checkmark" size={18} color="black" />}
               </TouchableOpacity>
             ))}
-            <TouchableOpacity 
-              style={styles.modalCancel} 
+            <TouchableOpacity
+              style={styles.modalCancel}
               onPress={() => setShowGenderModal(false)}
             >
-              <Text style={{color: 'red', fontWeight: 'bold'}}>Cancel</Text>
+              <Text style={{ color: 'red', fontWeight: 'bold' }}>Cancel</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
@@ -290,7 +298,7 @@ const styles = StyleSheet.create({
   buttonText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
   switchContainer: { flexDirection: 'row', justifyContent: 'center', marginTop: 20 },
   linkText: { fontWeight: 'bold', textDecorationLine: 'underline' },
-  
+
   // Custom Input Styles
   inputLabel: {
     fontSize: 14, fontWeight: '600', color: '#1f2937', marginBottom: 6, marginLeft: 4

@@ -1,0 +1,9 @@
+app/properties/new.tsx(133,90): error TS2339: Property 'EncodingType' does not exist on type 'typeof import("C:/Users/Alfonz/Desktop/Files/Codes/tessyndtedmobile/node_modules/expo-file-system/build/index")'.
+app/properties/new.tsx(179,22): error TS2345: Argument of type '"/(tabs)/properties"' is not assignable to parameter of type 'RelativePathString | ExternalPathString | "/compare" | `/compare?${string}` | `/compare#${string}` | "/duplicate_account" | `/duplicate_account?${string}` | `/duplicate_account#${string}` | "/forgot-password" | ... 137 more ... | { ...; }'.
+supabase/functions/send-email/index.ts(2,23): error TS2307: Cannot find module 'https://deno.land/std@0.168.0/http/server.ts' or its corresponding type declarations.
+supabase/functions/send-email/index.ts(3,30): error TS2307: Cannot find module 'https://esm.sh/@supabase/supabase-js@2' or its corresponding type declarations.
+supabase/functions/send-email/index.ts(10,14): error TS7006: Parameter 'req' implicitly has an 'any' type.
+supabase/functions/send-email/index.ts(22,7): error TS2304: Cannot find name 'Deno'.
+supabase/functions/send-email/index.ts(23,7): error TS2304: Cannot find name 'Deno'.
+supabase/functions/send-email/index.ts(54,27): error TS2304: Cannot find name 'Deno'.
+supabase/functions/send-email/index.ts(92,31): error TS18046: 'error' is of type 'unknown'.

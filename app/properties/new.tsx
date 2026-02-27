@@ -1,16 +1,22 @@
-import React, { useEffect, useState } from 'react';
-import { 
-  View, Text, TextInput, ScrollView, StyleSheet, TouchableOpacity, 
-  Alert, Image, ActivityIndicator, Dimensions, Linking 
-} from 'react-native';
-import { useRouter } from 'expo-router';
-import { supabase } from '../../lib/supabase';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
-import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
 import { decode } from 'base64-arraybuffer';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as ImagePicker from 'expo-image-picker';
+import { useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Dimensions,
+  Image,
+  Linking,
+  ScrollView, StyleSheet,
+  Text, TextInput,
+  TouchableOpacity,
+  View
+} from 'react-native';
+import { supabase } from '../../lib/supabase';
 
 const { width } = Dimensions.get('window');
 
@@ -64,7 +70,7 @@ export default function NewProperty() {
   // --- IMAGE UPLOAD ---
   const pickImage = async () => {
     if (form.images.length >= 10) return Alert.alert('Limit Reached', 'Max 10 images allowed');
-    
+
     let result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
@@ -176,7 +182,7 @@ export default function NewProperty() {
     if (error) Alert.alert('Error', error.message);
     else {
       Alert.alert('Success', 'Property listed successfully!');
-      router.replace('/(tabs)/properties');
+      router.replace('/(tabs)/landlordproperties');
     }
   };
 
@@ -198,11 +204,11 @@ export default function NewProperty() {
         {/* Title */}
         <View style={styles.section}>
           <Text style={styles.label}>PROPERTY TITLE *</Text>
-          <TextInput 
-            style={styles.titleInput} 
-            placeholder="e.g. Modern Loft" 
-            value={form.title} 
-            onChangeText={t => setForm({ ...form, title: t })} 
+          <TextInput
+            style={styles.titleInput}
+            placeholder="e.g. Modern Loft"
+            value={form.title}
+            onChangeText={t => setForm({ ...form, title: t })}
           />
         </View>
 
@@ -244,9 +250,9 @@ export default function NewProperty() {
 
           <Text style={styles.label}>ADDITIONAL COSTS</Text>
           <View style={styles.row}>
-             <TextInput style={[styles.input, {flex:1, marginRight:5}]} placeholder="Utilities" keyboardType="numeric" value={form.utilities_cost} onChangeText={t => setForm({...form, utilities_cost:t})} />
-             <TextInput style={[styles.input, {flex:1, marginRight:5}]} placeholder="Internet" keyboardType="numeric" value={form.internet_cost} onChangeText={t => setForm({...form, internet_cost:t})} />
-             <TextInput style={[styles.input, {flex:1}]} placeholder="Assoc." keyboardType="numeric" value={form.association_dues} onChangeText={t => setForm({...form, association_dues:t})} />
+            <TextInput style={[styles.input, { flex: 1, marginRight: 5 }]} placeholder="Utilities" keyboardType="numeric" value={form.utilities_cost} onChangeText={t => setForm({ ...form, utilities_cost: t })} />
+            <TextInput style={[styles.input, { flex: 1, marginRight: 5 }]} placeholder="Internet" keyboardType="numeric" value={form.internet_cost} onChangeText={t => setForm({ ...form, internet_cost: t })} />
+            <TextInput style={[styles.input, { flex: 1 }]} placeholder="Assoc." keyboardType="numeric" value={form.association_dues} onChangeText={t => setForm({ ...form, association_dues: t })} />
           </View>
         </View>
 
@@ -264,26 +270,26 @@ export default function NewProperty() {
 
           <Text style={styles.label}>TERMS & CONDITIONS (PDF)</Text>
           {form.terms_conditions ? (
-             <View style={styles.pdfContainer}>
-                <TouchableOpacity onPress={() => Linking.openURL(form.terms_conditions)} style={{flexDirection:'row', alignItems:'center'}}>
-                   <Ionicons name="document-text" size={20} color="#2563eb" />
-                   <Text style={{color:'#2563eb', fontWeight:'bold', marginLeft:5, textDecorationLine:'underline'}}>Terms PDF Uploaded</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setForm(prev => ({...prev, terms_conditions: ''}))} style={{padding:5}}>
-                   <Text style={{color:'#ef4444', fontSize:10, fontWeight:'bold', textTransform:'uppercase'}}>Remove</Text>
-                </TouchableOpacity>
-             </View>
+            <View style={styles.pdfContainer}>
+              <TouchableOpacity onPress={() => Linking.openURL(form.terms_conditions)} style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Ionicons name="document-text" size={20} color="#2563eb" />
+                <Text style={{ color: '#2563eb', fontWeight: 'bold', marginLeft: 5, textDecorationLine: 'underline' }}>Terms PDF Uploaded</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setForm(prev => ({ ...prev, terms_conditions: '' }))} style={{ padding: 5 }}>
+                <Text style={{ color: '#ef4444', fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase' }}>Remove</Text>
+              </TouchableOpacity>
+            </View>
           ) : (
-             <Text style={{fontSize:12, color:'#999', fontStyle:'italic', marginBottom:10}}>No custom terms uploaded.</Text>
+            <Text style={{ fontSize: 12, color: '#999', fontStyle: 'italic', marginBottom: 10 }}>No custom terms uploaded.</Text>
           )}
 
           <TouchableOpacity onPress={pickDocument} disabled={uploadingTerms} style={styles.uploadFileBtn}>
-             {uploadingTerms ? <ActivityIndicator size="small" color="black"/> : (
-               <>
-                 <Ionicons name="cloud-upload-outline" size={20} color="black" />
-                 <Text style={{fontWeight:'bold', marginLeft:8}}>Upload Terms PDF</Text>
-               </>
-             )}
+            {uploadingTerms ? <ActivityIndicator size="small" color="black" /> : (
+              <>
+                <Ionicons name="cloud-upload-outline" size={20} color="black" />
+                <Text style={{ fontWeight: 'bold', marginLeft: 8 }}>Upload Terms PDF</Text>
+              </>
+            )}
           </TouchableOpacity>
         </View>
 
@@ -344,7 +350,7 @@ const styles = StyleSheet.create({
   input: { borderWidth: 1, borderColor: '#E5E7EB', padding: 12, borderRadius: 10, marginBottom: 12, fontSize: 14, backgroundColor: '#FFFFFF' },
   titleInput: { backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: 'transparent', padding: 16, borderRadius: 12, fontSize: 18, fontWeight: '600' },
   row: { flexDirection: 'row' },
-  
+
   // PDF
   pdfContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, backgroundColor: '#eff6ff', borderRadius: 10, marginBottom: 10, borderWidth: 1, borderColor: '#dbeafe' },
   uploadFileBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 14, backgroundColor: '#f3f4f6', borderRadius: 10, borderWidth: 1, borderColor: '#e5e7eb', borderStyle: 'dashed' },

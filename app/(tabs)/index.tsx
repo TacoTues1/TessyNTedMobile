@@ -181,8 +181,8 @@ export default function Dashboard() {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <Image source={require('../../assets/images/home.png')} style={styles.logoImage} />
           <View>
-            <Text style={styles.brandName}>TessyNTed</Text>
-            <Text style={{ fontSize: 10, color: '#999', fontWeight: '500', marginTop: -1 }}>A Rental Management Platform</Text>
+            <Text style={styles.brandName}>Abalay</Text>
+            {/* <Text style={{ fontSize: 10, color: '#999', fontWeight: '500', marginTop: -1 }}>A Rental Management Platform</Text> */}
           </View>
         </View>
         <TouchableOpacity
@@ -244,7 +244,15 @@ export default function Dashboard() {
       ) : (
         // --- NORMAL DASHBOARD ---
         profile?.role === 'landlord' ? (
-          <LandlordDashboard session={session} profile={profile} />
+          <>
+            <LandlordDashboard session={session} profile={profile} />
+            <TouchableOpacity
+              style={styles.floatingAddBtn}
+              onPress={() => router.push('/(tabs)/landlordproperties')}
+            >
+              <Ionicons name="add" size={28} color="white" />
+            </TouchableOpacity>
+          </>
         ) : (
           <TenantDashboard session={session} profile={profile} />
         )
@@ -269,7 +277,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "#eee",
   },
   logoImage: { width: 36, height: 36, borderRadius: 10 },
-  brandName: { fontSize: 20, fontWeight: '900', color: '#111', letterSpacing: -0.5 },
+  brandName: { fontSize: 30, fontWeight: '900', color: '#111', letterSpacing: -0.5, fontFamily: 'Pacifico_400Regular' },
   notificationBtn: {
     width: 40,
     height: 40,
@@ -340,4 +348,23 @@ const styles = StyleSheet.create({
   menuIconBox: { width: 30, alignItems: "center", marginRight: 10 },
   menuText: { flex: 1, fontSize: 15, color: "#333" },
   divider: { height: 1, backgroundColor: "#f0f0f0", marginVertical: 5 },
+
+  // Floating Action Button
+  floatingAddBtn: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#000',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 8,
+    zIndex: 100,
+  },
 });

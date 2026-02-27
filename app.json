@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "easerentmobile",
-    "slug": "easerentmobile",
+    "name": "Abalay",
+    "slug": "abalay",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "easerentmobile",
+    "scheme": "abalay",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "platforms": [
@@ -25,7 +25,10 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.easerentmobile"
+      "package": "com.abalay.mobile",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "output": "static",
@@ -65,6 +68,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "11aabe72-97ea-49e6-9184-117eea374b4c"
+      }
     }
   }
 }

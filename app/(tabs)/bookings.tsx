@@ -52,11 +52,23 @@ export default function Bookings() {
     const [contractMonths, setContractMonths] = useState('12');
     const [endDate, setEndDate] = useState('');
     const [wifiDueDay, setWifiDueDay] = useState('');
+    const [waterDueDay, setWaterDueDay] = useState('');
+    const [electricityDueDay, setElectricityDueDay] = useState('');
+    const [alreadyPaid, setAlreadyPaid] = useState(false);
     const [penaltyDetails, setPenaltyDetails] = useState('');
     const [contractFile, setContractFile] = useState<any>(null);
     const [uploadingContract, setUploadingContract] = useState(false);
     const [showAssignWarning, setShowAssignWarning] = useState(false);
     const [showWifiDayPicker, setShowWifiDayPicker] = useState(false);
+    const [showWaterDayPicker, setShowWaterDayPicker] = useState(false);
+    const [showElectricityDayPicker, setShowElectricityDayPicker] = useState(false);
+    const [assignStep, setAssignStep] = useState(0);
+    const ASSIGN_STEPS = [
+        { label: 'Property', icon: '1' },
+        { label: 'Contract', icon: '2' },
+        { label: 'Documents', icon: '3' },
+        { label: 'Utilities', icon: '4' },
+    ];
 
     // Auto-calculate end date
     useEffect(() => {
@@ -402,20 +414,25 @@ export default function Bookings() {
     };
 
     const openAssignTenantModal = async (booking: any) => {
+        setAssignStep(0);
         setAssignBooking(booking);
         setPenaltyDetails('');
         setStartDate(new Date().toISOString().split('T')[0]);
         setContractMonths('12');
         setWifiDueDay('');
+        setWaterDueDay('');
+        setElectricityDueDay('');
+        setAlreadyPaid(false);
         setContractFile(null);
         setSelectedPropertyId(booking.property_id || ''); // Default to booked property
-        setShowAssignWarning(false);
         setShowWifiDayPicker(false);
+        setShowWaterDayPicker(false);
+        setShowElectricityDayPicker(false);
 
         // Load available properties
         const { data: props } = await supabase
             .from('properties')
-            .select('id, title, price, status, city')
+            .select('*')
             .eq('landlord', session.user.id)
             .eq('status', 'available')
             .eq('is_deleted', false);
@@ -450,56 +467,47 @@ export default function Bookings() {
         }
     };
 
-    const confirmAssignTenant = async () => {
+    const executeAssignment = async () => {
         const booking = assignBooking;
-        if (!booking || !selectedPropertyId) return Alert.alert("Error", "Select a property");
-
-        if (!startDate || !endDate || !contractMonths || !wifiDueDay || !penaltyDetails || !contractFile) {
-            return Alert.alert("Error", "Please fill all fields and upload contract.");
-        }
-
-        if (!showAssignWarning) {
-            setShowAssignWarning(true);
-            return;
-        }
-
         setUploadingContract(true);
 
         // Upload
         let contractUrl = null;
-        try {
-            // Read file as base64 using fetch hack for Expo
-            const response = await fetch(contractFile.uri);
-            const blob = await response.blob();
-            const reader = new FileReader();
+        if (contractFile) {
+            try {
+                // Read file as base64 using fetch hack for Expo
+                const response = await fetch(contractFile.uri);
+                const blob = await response.blob();
+                const reader = new FileReader();
 
-            const base64Promise = new Promise((resolve, reject) => {
-                reader.onload = () => {
-                    const result = reader.result as string;
-                    // result is "data:application/pdf;base64,..."
-                    const base64 = result.split(',')[1];
-                    resolve(base64);
-                };
-                reader.onerror = reject;
-            });
-            reader.readAsDataURL(blob);
-            const base64Data = await base64Promise as string;
+                const base64Promise = new Promise((resolve, reject) => {
+                    reader.onload = () => {
+                        const result = reader.result as string;
+                        // result is "data:application/pdf;base64,..."
+                        const base64 = result.split(',')[1];
+                        resolve(base64);
+                    };
+                    reader.onerror = reject;
+                });
+                reader.readAsDataURL(blob);
+                const base64Data = await base64Promise as string;
 
-            const fileName = `${selectedPropertyId}_${booking.tenant}_${Date.now()}.pdf`;
-            const filePath = `contracts/${fileName}`;
+                const fileName = `${selectedPropertyId}_${booking.tenant}_${Date.now()}.pdf`;
+                const filePath = `contracts/${fileName}`;
 
-            const { error: uploadError } = await supabase.storage.from('contracts').upload(filePath, decode(base64Data), {
-                contentType: 'application/pdf',
-                upsert: false
-            });
+                const { error: uploadError } = await supabase.storage.from('contracts').upload(filePath, decode(base64Data), {
+                    contentType: 'application/pdf',
+                    upsert: false
+                });
 
-            if (uploadError) throw uploadError;
+                if (uploadError) throw uploadError;
 
-            const { data: urlData } = supabase.storage.from('contracts').getPublicUrl(filePath);
-            contractUrl = urlData.publicUrl;
-        } catch (e: any) {
-            setUploadingContract(false);
-            return Alert.alert("Upload Error", e.message);
+                const { data: urlData } = supabase.storage.from('contracts').getPublicUrl(filePath);
+                contractUrl = urlData.publicUrl;
+            } catch (e: any) {
+                setUploadingContract(false);
+                return Alert.alert("Upload Error", e.message);
+            }
         }
 
         const selectedProp = availableProperties.find((p: any) => p.id === selectedPropertyId) || booking.property;
@@ -516,8 +524,9 @@ export default function Bookings() {
                 contract_end_date: endDate,
                 security_deposit: securityDeposit,
                 security_deposit_used: 0,
-                wifi_due_day: parseInt(wifiDueDay),
-                late_payment_fee: parseFloat(penaltyDetails),
+                wifi_due_day: selectedProp?.amenities?.includes('Free WiFi') ? null : (wifiDueDay ? parseInt(wifiDueDay) : null),
+                electricity_due_day: selectedProp?.amenities?.includes('Free Electricity') ? null : (electricityDueDay ? parseInt(electricityDueDay) : null),
+                late_payment_fee: parseFloat(penaltyDetails) || 0,
                 contract_url: contractUrl
             }).select().single();
 
@@ -534,30 +543,32 @@ export default function Bookings() {
             // Notification
             const msg = `You have been assigned to ${selectedProp?.title}. Move-in bill sent.`;
             try {
-                // Landlords should be able to create notifications, but wrap in try-catch just in case
-                await createNotification(booking.tenant, 'occupancy_assigned', msg, { actor: session.user.id });
+                const msg = `You have been assigned to "${selectedProp?.title}". Move-in bill sent.`;
+                await createNotification(booking.tenant, 'occupancy_assigned', msg, { actor: session.user.id, email: true, sms: true });
             } catch (notifErr) {
                 console.log('Notification failed:', notifErr);
             }
 
             // Bill
-            await supabase.from('payment_requests').insert({
-                landlord: session.user.id,
-                tenant: booking.tenant,
-                property_id: selectedPropertyId,
-                occupancy_id: newOccupancy.id,
-                rent_amount: rentAmount,
-                advance_amount: rentAmount,
-                security_deposit_amount: rentAmount,
-                bills_description: 'Move-in Payment (Rent + Advance + Security Deposit)',
-                due_date: new Date(startDate).toISOString(),
-                status: 'pending',
-                is_move_in_payment: true
-            });
+            if (!alreadyPaid) {
+                await supabase.from('payment_requests').insert({
+                    landlord: session.user.id,
+                    tenant: booking.tenant,
+                    property_id: selectedPropertyId,
+                    occupancy_id: newOccupancy.id,
+                    rent_amount: rentAmount,
+                    advance_amount: rentAmount,
+                    security_deposit_amount: rentAmount,
+                    bills_description: 'Move-in Payment (Rent + Advance + Security Deposit)',
+                    due_date: new Date(startDate).toISOString(),
+                    status: 'pending',
+                    is_move_in_payment: true
+                });
+            }
 
             setShowAssignModal(false);
             setAssignBooking(null);
-            Alert.alert("Success", "Tenant assigned successfully!");
+            Alert.alert("Success", alreadyPaid ? 'Tenant assigned successfully!' : 'Tenant assigned! Move-in payment bill sent.');
             loadBookings(session.user.id, profile.role, filter);
         } catch (err: any) {
             Alert.alert("Error", err.message || "Failed to assign tenant");
@@ -565,6 +576,39 @@ export default function Bookings() {
             setUploadingContract(false);
             setShowAssignWarning(false);
         }
+    };
+
+    const confirmAssignTenant = () => {
+        if (!assignBooking || !selectedPropertyId) return Alert.alert("Error", "Select a property");
+
+        if (!startDate || !endDate || !contractMonths || !penaltyDetails) {
+            return Alert.alert("Error", "Please fill all required fields.");
+        }
+
+        const selectedPropInfo = availableProperties.find((p: any) => p.id === selectedPropertyId);
+        const amenities = selectedPropInfo?.amenities || [];
+        const isWaterFree = amenities.includes('Free Water');
+        const isElecFree = amenities.includes('Free Electricity');
+        const isWifiFree = amenities.includes('Free WiFi');
+
+        if (!isWaterFree && (!waterDueDay || parseInt(waterDueDay) < 1 || parseInt(waterDueDay) > 31)) {
+            return Alert.alert('Error', 'Please enter a valid Water Due Day (1-31)');
+        }
+        if (!isElecFree && (!electricityDueDay || parseInt(electricityDueDay) < 1 || parseInt(electricityDueDay) > 31)) {
+            return Alert.alert('Error', 'Please enter a valid Electricity Due Day (1-31)');
+        }
+        if (!isWifiFree && (!wifiDueDay || parseInt(wifiDueDay) < 1 || parseInt(wifiDueDay) > 31)) {
+            return Alert.alert('Error', 'Please enter a valid WiFi Due Day (1-31)');
+        }
+
+        Alert.alert(
+            "Confirm Assignment?",
+            "This will generate a move-in bill and mark the property as occupied.",
+            [
+                { text: "Cancel", style: "cancel" },
+                { text: "Confirm & Assign", onPress: executeAssignment }
+            ]
+        );
     };
 
     // --- MODAL & SCHEDULING ---
@@ -652,6 +696,21 @@ export default function Bookings() {
         return diff >= 12;
     };
 
+    const nextAssignStep = () => {
+        if (assignStep === 0 && !selectedPropertyId) return Alert.alert('Error', 'Please select a property');
+        if (assignStep === 1) {
+            if (!startDate) return Alert.alert('Error', 'Please enter a start date');
+            const months = parseInt(contractMonths);
+            if (isNaN(months) || months < 1) return Alert.alert('Error', 'Contract must be at least 1 month');
+        }
+        if (assignStep === 2) {
+            if (!penaltyDetails) return Alert.alert('Error', 'Please enter late payment fee');
+        }
+        setAssignStep(s => Math.min(s + 1, ASSIGN_STEPS.length - 1));
+    };
+
+    const prevAssignStep = () => setAssignStep(s => Math.max(s - 1, 0));
+
     // --- RENDER ---
     const hasGlobalActive = bookings.some(b => ['pending', 'pending_approval', 'approved', 'accepted'].includes(b.status));
     const pendingCount = bookings.filter(b => b.status === 'pending' || b.status === 'pending_approval').length;
@@ -681,7 +740,7 @@ export default function Bookings() {
         } else if (['approved', 'accepted'].includes(statusLower)) {
             badgeStyle = styles.badgeGreen; badgeText = styles.badgeTextGreen; statusText = 'Approved';
         } else if (statusLower === 'viewing_done') {
-            badgeStyle = styles.badgeIndigo; badgeText = styles.badgeTextIndigo; statusText = 'Viewing Success';
+            badgeStyle = styles.badgeIndigo; badgeText = styles.badgeTextIndigo; statusText = 'Waiting for Assigning';
         } else if (['rejected', 'cancelled'].includes(statusLower)) {
             badgeStyle = styles.badgeRed; badgeText = styles.badgeTextRed;
         }
@@ -998,33 +1057,77 @@ export default function Bookings() {
                 </View>
             </Modal>
 
-            {/* ASSIGN TENANT MODAL */}
+            {/* ASSIGN TENANT MODAL WIZARD */}
             <Modal visible={showAssignModal} animationType="slide" presentationStyle="pageSheet">
-                <View style={{ flex: 1, backgroundColor: 'white' }}>
-                    <View style={styles.modalHeader}>
-                        <Text style={styles.modalTitle}>Assign Tenant</Text>
-                        <TouchableOpacity onPress={() => setShowAssignModal(false)}><Ionicons name="close" size={24} color="#666" /></TouchableOpacity>
+                <View style={{ flex: 1, backgroundColor: '#f9fafb' }}>
+                    {/* Top Bar */}
+                    <View style={styles.wizardTopBar}>
+                        <TouchableOpacity onPress={() => setShowAssignModal(false)} style={styles.backBtnText}>
+                            <Ionicons name="chevron-down" size={18} color="#4b5563" />
+                            <Text style={{ fontWeight: '600', color: '#4b5563', fontSize: 14 }}>Close</Text>
+                        </TouchableOpacity>
+                        <Text style={styles.stepCounterText}>STEP {assignStep + 1} OF {ASSIGN_STEPS.length}</Text>
+                        <View style={{ width: 60 }} />
+                    </View>
+
+                    {/* Progress Bar */}
+                    <View style={styles.progressBarContainer}>
+                        <View style={[styles.progressBarFill, { width: `${((assignStep + 1) / ASSIGN_STEPS.length) * 100}%` }]} />
                     </View>
 
                     <ScrollView contentContainerStyle={{ padding: 20 }}>
-                        {/* Tenant Info */}
-                        {assignBooking?.tenant_profile && (
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 20, backgroundColor: '#f0f9ff', padding: 15, borderRadius: 12, borderWidth: 1, borderColor: '#bae6fd' }}>
-                                <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#0284c7', alignItems: 'center', justifyContent: 'center' }}>
-                                    <Text style={{ color: 'white', fontWeight: 'bold' }}>{assignBooking.tenant_profile.first_name?.[0]}</Text>
-                                </View>
-                                <View>
-                                    <Text style={{ fontSize: 10, color: '#0369a1', fontWeight: 'bold', textTransform: 'uppercase' }}>Assigning</Text>
-                                    <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#0c4a6e' }}>{assignBooking.tenant_profile.first_name} {assignBooking.tenant_profile.last_name}</Text>
-                                </View>
+                        {/* Page Title */}
+                        <View style={styles.titleContainer}>
+                            <View style={styles.titleIconBox}>
+                                <Ionicons name="person-add" size={20} color="white" />
                             </View>
-                        )}
+                            <View>
+                                <Text style={styles.pageTitle}>Assign Tenant</Text>
+                                <Text style={styles.pageSubtitle}>Set up the occupancy contract</Text>
+                            </View>
+                        </View>
 
-                        {!showAssignWarning ? (
-                            <>
-                                <Text style={styles.label}>Select Property</Text>
-                                <View style={{ maxHeight: 150, marginBottom: 15 }}>
-                                    <ScrollView nestedScrollEnabled style={{ borderWidth: 1, borderColor: '#eee', borderRadius: 10 }}>
+                        {/* Stepper Pills */}
+                        <View style={styles.stepperContainer}>
+                            {ASSIGN_STEPS.map((s, i) => {
+                                const isPast = i < assignStep;
+                                const isCurrent = i === assignStep;
+                                return (
+                                    <View key={i} style={{ flex: 1, marginHorizontal: 2 }}>
+                                        <View style={[
+                                            styles.stepperLine,
+                                            isPast ? { backgroundColor: '#10b981' } : isCurrent ? { backgroundColor: '#111' } : { backgroundColor: '#e5e7eb' }
+                                        ]} />
+                                        <View style={styles.stepperLabelContainer}>
+                                            <View style={[
+                                                styles.stepperNumber,
+                                                isPast ? { backgroundColor: '#10b981' } : isCurrent ? { backgroundColor: '#111' } : { backgroundColor: '#e5e7eb' }
+                                            ]}>
+                                                {isPast ? <Ionicons name="checkmark" size={10} color="white" /> : <Text style={[styles.stepperNumberText, (isPast || isCurrent) && { color: 'white' }]}>{i + 1}</Text>}
+                                            </View>
+                                            <Text style={[styles.stepperLabel, isCurrent && { color: '#111', fontWeight: 'bold' }]}>{s.label}</Text>
+                                        </View>
+                                    </View>
+                                );
+                            })}
+                        </View>
+
+                        <View style={styles.stepContentCard}>
+                            {assignStep === 0 && (
+                                <View style={{ width: '100%' }}>
+                                    {assignBooking?.tenant_profile && (
+                                        <View style={styles.wizardTenantCard}>
+                                            <View style={styles.wizardTenantAvatar}>
+                                                <Text style={{ color: 'white', fontWeight: 'bold' }}>{assignBooking.tenant_profile.first_name?.[0]}</Text>
+                                            </View>
+                                            <View>
+                                                <Text style={styles.wizardTenantRole}>Assigning Tenant</Text>
+                                                <Text style={styles.wizardTenantName}>{assignBooking.tenant_profile.first_name} {assignBooking.tenant_profile.last_name}</Text>
+                                            </View>
+                                        </View>
+                                    )}
+                                    <Text style={styles.wizardLabel}>Select Property *</Text>
+                                    <ScrollView nestedScrollEnabled style={styles.wizardPropScroll}>
                                         {availableProperties.map(p => {
                                             const isSelected = selectedPropertyId === p.id;
                                             const isBookedProperty = p.id === assignBooking?.property_id;
@@ -1032,85 +1135,247 @@ export default function Bookings() {
                                                 <TouchableOpacity
                                                     key={p.id}
                                                     onPress={() => setSelectedPropertyId(p.id)}
-                                                    style={{
-                                                        padding: 12,
-                                                        borderBottomWidth: 1,
-                                                        borderColor: '#f3f4f6',
-                                                        backgroundColor: isSelected ? '#111' : isBookedProperty ? '#dcfce7' : 'white'
-                                                    }}
+                                                    style={[styles.wizardPropItem, isSelected && styles.wizardPropItemSelected, isBookedProperty && !isSelected && styles.wizardPropItemBooked]}
                                                 >
                                                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                                                         <View>
                                                             <Text style={{ fontWeight: 'bold', color: isSelected ? 'white' : '#111' }}>
-                                                                {p.title} {isBookedProperty && !isSelected && '(Booked)'}
+                                                                {p.title} {isBookedProperty && !isSelected && '(Requested)'}
                                                             </Text>
-                                                            <Text style={{ fontSize: 10, color: isSelected ? '#ccc' : '#666' }}>{p.city} • ₱{p.price}</Text>
+                                                            <Text style={{ fontSize: 11, color: isSelected ? '#ccc' : '#666', marginTop: 2 }}>{p.city} • ₱{p.price}</Text>
                                                         </View>
-                                                        {isBookedProperty && !isSelected && <Ionicons name="star" size={16} color="#166534" />}
+                                                        <View style={[styles.radioOuter, isSelected && styles.radioOuterSelected]}>
+                                                            {isSelected && <View style={styles.radioInner} />}
+                                                        </View>
                                                     </View>
                                                 </TouchableOpacity>
                                             );
                                         })}
                                     </ScrollView>
                                 </View>
+                            )}
 
-                                <Text style={styles.label}>Start Date</Text>
-                                <TextInput style={styles.input} value={startDate} onChangeText={setStartDate} placeholder="YYYY-MM-DD" />
+                            {assignStep === 1 && (() => {
+                                const selectedPropInfo = availableProperties.find((p: any) => p.id === selectedPropertyId);
+                                const rentPrice = selectedPropInfo?.price || assignBooking?.property?.price || 0;
+                                return (
+                                    <View style={{ width: '100%' }}>
+                                        <Text style={styles.wizardLabel}>Start Date *</Text>
+                                        <TextInput style={styles.wizardInput} value={startDate} onChangeText={setStartDate} placeholder="YYYY-MM-DD" placeholderTextColor="#c4c4c4" />
 
-                                <Text style={styles.label}>Duration (Months)</Text>
-                                <TextInput style={styles.input} value={contractMonths} onChangeText={setContractMonths} keyboardType="numeric" />
+                                        <Text style={styles.wizardLabel}>Contract Duration (Months) *</Text>
+                                        <TextInput style={styles.wizardInput} value={contractMonths} onChangeText={setContractMonths} keyboardType="numeric" placeholderTextColor="#c4c4c4" />
 
-                                <Text style={styles.label}>End Date (Auto)</Text>
-                                <TextInput style={[styles.input, { backgroundColor: '#f3f4f6' }]} value={endDate} editable={false} />
+                                        <Text style={styles.wizardLabel}>End Date (Auto-calculated)</Text>
+                                        <View style={styles.wizardReadonlyInput}>
+                                            <Text style={{ fontSize: 15, color: '#6b7280', fontWeight: '500' }}>{endDate || '—'}</Text>
+                                        </View>
 
-                                <Text style={styles.label}>Late Penalty Fee (₱)</Text>
-                                <TextInput style={styles.input} value={penaltyDetails} onChangeText={setPenaltyDetails} keyboardType="numeric" placeholder="e.g. 500" />
+                                        <View style={styles.summaryCard}>
+                                            <Text style={styles.summaryTitle}>Move-in Summary</Text>
+                                            <View style={styles.summaryRow}>
+                                                <Text style={styles.summaryLabel}>Rent (1st Month):</Text>
+                                                <Text style={styles.summaryValue}>₱{rentPrice.toLocaleString()}</Text>
+                                            </View>
+                                            <View style={styles.summaryRow}>
+                                                <Text style={styles.summaryLabel}>Advance Pay:</Text>
+                                                <Text style={styles.summaryValue}>₱{rentPrice.toLocaleString()}</Text>
+                                            </View>
+                                            <View style={styles.summaryRow}>
+                                                <Text style={styles.summaryLabel}>Security Deposit:</Text>
+                                                <Text style={styles.summaryValue}>₱{rentPrice.toLocaleString()}</Text>
+                                            </View>
+                                            <View style={styles.summaryDivider} />
+                                            <View style={styles.summaryRow}>
+                                                <Text style={styles.summaryTotalLabel}>Total Amount:</Text>
+                                                <Text style={styles.summaryTotalValue}>₱{(rentPrice * 3).toLocaleString()}</Text>
+                                            </View>
+                                        </View>
+                                    </View>
+                                )
+                            })()}
 
-                                <Text style={styles.label}>Wifi Due Day</Text>
-                                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-start', marginTop: 5 }}>
-                                    {Array.from({ length: 31 }, (_, i) => i + 1).map(day => (
-                                        <TouchableOpacity
-                                            key={day}
-                                            onPress={() => setWifiDueDay(day.toString())}
-                                            style={{
-                                                width: 36, height: 36, borderRadius: 18,
-                                                backgroundColor: wifiDueDay === day.toString() ? 'black' : 'white',
-                                                alignItems: 'center', justifyContent: 'center',
-                                                borderWidth: 1, borderColor: wifiDueDay === day.toString() ? 'black' : '#e5e7eb'
-                                            }}
-                                        >
-                                            <Text style={{ fontSize: 12, fontWeight: 'bold', color: wifiDueDay === day.toString() ? 'white' : '#374151' }}>{day}</Text>
-                                        </TouchableOpacity>
-                                    ))}
-                                </View>
-
-                                <Text style={styles.label}>Contract PDF</Text>
-                                <TouchableOpacity onPress={pickContractFile} style={[styles.input, { flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
-                                    <Ionicons name="document-text-outline" size={20} color="#666" />
-                                    <Text style={{ flex: 1, color: contractFile ? '#111' : '#999' }}>{contractFile ? contractFile.name : 'Tap to upload PDF'}</Text>
-                                    {contractFile && <Ionicons name="checkmark-circle" size={18} color="green" />}
-                                </TouchableOpacity>
-
-                                <TouchableOpacity onPress={confirmAssignTenant} style={[styles.btnBlack, { marginTop: 20 }]}>
-                                    <Text style={styles.btnTextWhite}>Submit Assignment</Text>
-                                </TouchableOpacity>
-                            </>
-                        ) : (
-                            <View style={{ alignItems: 'center', padding: 20 }}>
-                                <Ionicons name="alert-circle" size={50} color="#eab308" style={{ marginBottom: 10 }} />
-                                <Text style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 10 }}>Confirm Assignment?</Text>
-                                <Text style={{ textAlign: 'center', color: '#666', marginBottom: 20 }}>
-                                    This will generate a move-in bill and mark the property as occupied.
-                                </Text>
-                                <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
-                                    <TouchableOpacity onPress={() => setShowAssignWarning(false)} style={styles.btnOutline}><Text>Cancel</Text></TouchableOpacity>
-                                    <TouchableOpacity onPress={confirmAssignTenant} disabled={uploadingContract} style={styles.btnBlack}>
-                                        {uploadingContract ? <ActivityIndicator color="white" /> : <Text style={styles.btnTextWhite}>Confirm & Assign</Text>}
+                            {assignStep === 2 && (
+                                <View style={{ width: '100%' }}>
+                                    <Text style={styles.wizardLabel}>Contract PDF (Optional)</Text>
+                                    <TouchableOpacity style={styles.uploadBtn} onPress={pickContractFile} activeOpacity={0.8}>
+                                        <Ionicons name={contractFile ? "document-attach" : "cloud-upload-outline"} size={22} color={contractFile ? "#10b981" : "#9ca3af"} />
+                                        <Text style={{ fontSize: 14, color: contractFile ? '#10b981' : '#9ca3af', fontWeight: '600' }}>
+                                            {contractFile ? contractFile.name : 'Click to upload contract PDF'}
+                                        </Text>
                                     </TouchableOpacity>
+
+                                    <Text style={styles.wizardLabel}>Late Payment Fee (₱) *</Text>
+                                    <TextInput style={styles.wizardInput} value={penaltyDetails} onChangeText={setPenaltyDetails} keyboardType="numeric" placeholder="e.g. 500" placeholderTextColor="#c4c4c4" />
+                                    <Text style={{ fontSize: 11, color: '#9ca3af', marginTop: 4, marginLeft: 4 }}>Amount charged when rent is paid late.</Text>
                                 </View>
-                            </View>
-                        )}
+                            )}
+
+                            {assignStep === 3 && (() => {
+                                const selectedPropInfo = availableProperties.find((p: any) => p.id === selectedPropertyId);
+                                const amenities = selectedPropInfo?.amenities || [];
+                                const isWaterFree = amenities.includes('Free Water');
+                                const isElecFree = amenities.includes('Free Electricity');
+                                const isWifiFree = amenities.includes('Free WiFi');
+
+                                return (
+                                    <View style={{ width: '100%' }}>
+                                        <View style={styles.wizardInfoBox}>
+                                            <Ionicons name="information-circle" size={16} color="#4f46e5" />
+                                            <Text style={styles.wizardInfoText}>Select a due day for each utility. A 4-day notification window allows you to prepare for upcoming billing.</Text>
+                                        </View>
+
+                                        {/* Water */}
+                                        {!isWaterFree ? (
+                                            <View style={styles.utilityInputCard}>
+                                                <View style={[styles.utilityIconBox, { backgroundColor: '#eff6ff' }]}><Ionicons name="water" size={18} color="#3b82f6" /></View>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={styles.utilityName}>Water Due Day</Text>
+                                                    <Text style={styles.utilityDesc}>Day of month (1-31)</Text>
+                                                </View>
+                                                <TouchableOpacity style={[styles.utilityInput, { width: 90, justifyContent: 'center' }]} onPress={() => setShowWaterDayPicker(true)}>
+                                                    <Text style={{ textAlign: 'center', fontWeight: 'bold', color: '#111' }}>
+                                                        {waterDueDay ? `${waterDueDay} - ${Math.min(parseInt(waterDueDay) + 3, 31)}` : 'Select'}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            </View>
+                                        ) : (
+                                            <View style={styles.utilityFreeCard}>
+                                                <View style={[styles.utilityIconBox, { backgroundColor: '#dcfce7' }]}><Ionicons name="water" size={18} color="#10b981" /></View>
+                                                <View style={{ flex: 1 }}><Text style={[styles.utilityName, { color: '#047857' }]}>Free Water</Text></View>
+                                                <View style={styles.utilityBadge}><Text style={styles.utilityBadgeText}>Included</Text></View>
+                                            </View>
+                                        )}
+
+                                        {/* Electricity */}
+                                        {!isElecFree ? (
+                                            <View style={styles.utilityInputCard}>
+                                                <View style={[styles.utilityIconBox, { backgroundColor: '#fef3c7' }]}><Ionicons name="flash" size={18} color="#f59e0b" /></View>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={styles.utilityName}>Electricity Due Day</Text>
+                                                    <Text style={styles.utilityDesc}>Day of month (1-31)</Text>
+                                                </View>
+                                                <TouchableOpacity style={[styles.utilityInput, { width: 90, justifyContent: 'center' }]} onPress={() => setShowElectricityDayPicker(true)}>
+                                                    <Text style={{ textAlign: 'center', fontWeight: 'bold', color: '#111' }}>
+                                                        {electricityDueDay ? `${electricityDueDay} - ${Math.min(parseInt(electricityDueDay) + 3, 31)}` : 'Select'}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            </View>
+                                        ) : (
+                                            <View style={styles.utilityFreeCard}>
+                                                <View style={[styles.utilityIconBox, { backgroundColor: '#dcfce7' }]}><Ionicons name="flash" size={18} color="#10b981" /></View>
+                                                <View style={{ flex: 1 }}><Text style={[styles.utilityName, { color: '#047857' }]}>Free Electricity</Text></View>
+                                                <View style={styles.utilityBadge}><Text style={styles.utilityBadgeText}>Included</Text></View>
+                                            </View>
+                                        )}
+
+                                        {/* WiFi */}
+                                        {!isWifiFree ? (
+                                            <View style={styles.utilityInputCard}>
+                                                <View style={[styles.utilityIconBox, { backgroundColor: '#f3e8ff' }]}><Ionicons name="wifi" size={18} color="#8b5cf6" /></View>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={styles.utilityName}>WiFi Due Day</Text>
+                                                    <Text style={styles.utilityDesc}>Day of month (1-31)</Text>
+                                                </View>
+                                                <TouchableOpacity style={[styles.utilityInput, { width: 90, justifyContent: 'center' }]} onPress={() => setShowWifiDayPicker(true)}>
+                                                    <Text style={{ textAlign: 'center', fontWeight: 'bold', color: '#111' }}>
+                                                        {wifiDueDay ? `${wifiDueDay} - ${Math.min(parseInt(wifiDueDay) + 3, 31)}` : 'Select'}
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            </View>
+                                        ) : (
+                                            <View style={styles.utilityFreeCard}>
+                                                <View style={[styles.utilityIconBox, { backgroundColor: '#dcfce7' }]}><Ionicons name="wifi" size={18} color="#10b981" /></View>
+                                                <View style={{ flex: 1 }}><Text style={[styles.utilityName, { color: '#047857' }]}>Free WiFi</Text></View>
+                                                <View style={styles.utilityBadge}><Text style={styles.utilityBadgeText}>Included</Text></View>
+                                            </View>
+                                        )}
+
+                                        <View style={styles.alreadyPaidCard}>
+                                            <View style={{ flex: 1, paddingRight: 10 }}>
+                                                <Text style={styles.alreadyPaidTitle}>Tenant already paid?</Text>
+                                                <Text style={styles.alreadyPaidDesc}>Skip auto-billing if payment was received offline.</Text>
+                                            </View>
+                                            <TouchableOpacity activeOpacity={0.8} onPress={() => setAlreadyPaid(!alreadyPaid)}>
+                                                <View style={[styles.switchTrack, alreadyPaid && styles.switchTrackActive]}>
+                                                    <View style={[styles.switchThumb, alreadyPaid && styles.switchThumbActive]} />
+                                                </View>
+                                            </TouchableOpacity>
+                                        </View>
+                                        {alreadyPaid && (
+                                            <Text style={styles.alreadyPaidNote}>✓ No move-in bill will be generated</Text>
+                                        )}
+                                    </View>
+                                )
+                            })()}
+                        </View>
+                        <View style={{ height: 100 }} />
                     </ScrollView>
+
+                    {/* Bottom Actions */}
+                    <View style={styles.bottomActions}>
+                        {assignStep > 0 && (
+                            <TouchableOpacity style={styles.wizardBtnSecondary} onPress={prevAssignStep}>
+                                <Text style={styles.wizardBtnSecondaryText}>Back</Text>
+                            </TouchableOpacity>
+                        )}
+                        {assignStep < ASSIGN_STEPS.length - 1 ? (
+                            <TouchableOpacity style={styles.wizardBtnPrimary} onPress={nextAssignStep}>
+                                <Text style={styles.wizardBtnPrimaryText}>Continue</Text>
+                            </TouchableOpacity>
+                        ) : (
+                            <TouchableOpacity
+                                style={[styles.wizardBtnPrimary, uploadingContract && { opacity: 0.7 }]}
+                                onPress={confirmAssignTenant}
+                                disabled={uploadingContract}
+                            >
+                                {uploadingContract ? <ActivityIndicator color="white" size="small" /> : <Text style={styles.wizardBtnPrimaryText}>Assign Tenant</Text>}
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                    {/* Day Picker Overlay */}
+                    {(showWaterDayPicker || showElectricityDayPicker || showWifiDayPicker) && (
+                        <View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', zIndex: 999 }]}>
+                            <View style={{ backgroundColor: 'white', borderRadius: 24, padding: 24, alignItems: 'center', width: '85%', maxWidth: 350 }}>
+                                <Text style={styles.modalTitleCenter}>Select Due Day</Text>
+                                <Text style={styles.modalTextCenter}>Auto sets a 4-day billing period</Text>
+
+                                <View style={{ height: 260, marginTop: 20, width: '100%' }}>
+                                    <ScrollView contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'center' }}>
+                                        {Array.from({ length: 31 }, (_, i) => i + 1).map(day => (
+                                            <TouchableOpacity
+                                                key={day}
+                                                style={{ width: 55, height: 40, backgroundColor: '#f3f4f6', borderRadius: 8, alignItems: 'center', justifyContent: 'center' }}
+                                                onPress={() => {
+                                                    if (showWaterDayPicker) setWaterDueDay(day.toString());
+                                                    if (showElectricityDayPicker) setElectricityDueDay(day.toString());
+                                                    if (showWifiDayPicker) setWifiDueDay(day.toString());
+
+                                                    setShowWaterDayPicker(false);
+                                                    setShowElectricityDayPicker(false);
+                                                    setShowWifiDayPicker(false);
+                                                }}
+                                            >
+                                                <Text style={{ fontWeight: 'bold', color: '#111' }}>{day}</Text>
+                                            </TouchableOpacity>
+                                        ))}
+                                    </ScrollView>
+                                </View>
+                                <Text style={{ fontSize: 10, color: '#9ca3af', textAlign: 'center', marginTop: 12 }}>For months with fewer days, the last available day is used.</Text>
+
+                                <TouchableOpacity
+                                    style={{ marginTop: 20, width: '100%', paddingVertical: 14, borderRadius: 12, backgroundColor: '#f3f4f6', alignItems: 'center' }}
+                                    onPress={() => {
+                                        setShowWaterDayPicker(false);
+                                        setShowElectricityDayPicker(false);
+                                        setShowWifiDayPicker(false);
+                                    }}
+                                >
+                                    <Text style={{ fontWeight: 'bold', color: '#111' }}>Cancel</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    )}
                 </View>
             </Modal>
 
@@ -1197,5 +1462,73 @@ const styles = StyleSheet.create({
     noSlots: { textAlign: 'center', color: '#999', marginVertical: 20 },
     label: { fontSize: 12, fontWeight: 'bold', marginTop: 16, marginBottom: 8, color: '#666' },
     textArea: { borderWidth: 1.5, borderColor: '#e5e7eb', borderRadius: 14, padding: 14, height: 80, textAlignVertical: 'top', backgroundColor: '#f9fafb', fontSize: 14 },
-    input: { height: 48, borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, paddingHorizontal: 12, fontSize: 14, backgroundColor: '#f9fafb', color: '#111' }
+    input: { height: 48, borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, paddingHorizontal: 12, fontSize: 14, backgroundColor: '#f9fafb', color: '#111' },
+
+    // WIZARD STYLES (Copied from assigntenant.tsx)
+    wizardTopBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 14, backgroundColor: 'white' },
+    backBtnText: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    stepCounterText: { fontSize: 11, fontWeight: '800', color: '#9ca3af', letterSpacing: 1 },
+    progressBarContainer: { height: 3, backgroundColor: '#f3f4f6', width: '100%' },
+    progressBarFill: { height: '100%', backgroundColor: '#111', borderTopRightRadius: 3, borderBottomRightRadius: 3 },
+    titleContainer: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 24, marginTop: 10 },
+    titleIconBox: { width: 44, height: 44, borderRadius: 12, backgroundColor: '#111', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10 },
+    pageTitle: { fontSize: 24, fontWeight: '900', color: '#111', letterSpacing: -0.5 },
+    pageSubtitle: { fontSize: 13, color: '#6b7280', marginTop: 2 },
+    stepperContainer: { flexDirection: 'row', marginBottom: 24 },
+    stepperLine: { height: 6, borderRadius: 3, width: '100%' },
+    stepperLabelContainer: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 },
+    stepperNumber: { width: 16, height: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+    stepperNumberText: { fontSize: 9, fontWeight: '900', color: '#9ca3af' },
+    stepperLabel: { fontSize: 11, fontWeight: '600', color: '#9ca3af' },
+    stepContentCard: { backgroundColor: 'white', borderRadius: 20, padding: 20, borderWidth: 1, borderColor: '#f3f4f6', shadowColor: '#000', shadowOpacity: 0.02, shadowRadius: 15, elevation: 2 },
+    wizardLabel: { fontSize: 12, fontWeight: '800', color: '#374151', marginBottom: 8, marginTop: 16, paddingLeft: 4 },
+    wizardInput: { backgroundColor: 'white', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, fontSize: 15, color: '#111', fontWeight: '500' },
+    wizardReadonlyInput: { backgroundColor: '#f9fafb', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14 },
+    wizardTenantCard: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12, backgroundColor: '#f0f9ff', padding: 15, borderRadius: 16, borderWidth: 1, borderColor: '#bae6fd' },
+    wizardTenantAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#0284c7', alignItems: 'center', justifyContent: 'center' },
+    wizardTenantRole: { fontSize: 10, color: '#0369a1', fontWeight: 'bold', textTransform: 'uppercase' },
+    wizardTenantName: { fontSize: 16, fontWeight: 'bold', color: '#0c4a6e' },
+    wizardPropScroll: { maxHeight: 220, borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 16, backgroundColor: '#f9fafb' },
+    wizardPropItem: { padding: 16, borderBottomWidth: 1, borderColor: '#f3f4f6' },
+    wizardPropItemSelected: { backgroundColor: '#111' },
+    wizardPropItemBooked: { backgroundColor: '#dcfce7' },
+    radioOuter: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#d1d5db', alignItems: 'center', justifyContent: 'center' },
+    radioOuterSelected: { borderColor: 'white' },
+    radioInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: 'white' },
+    summaryCard: { marginTop: 20, backgroundColor: '#f9fafb', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: '#f3f4f6' },
+    summaryTitle: { fontSize: 13, fontWeight: '800', color: '#374151', marginBottom: 12 },
+    summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 6 },
+    summaryLabel: { fontSize: 13, color: '#6b7280' },
+    summaryValue: { fontSize: 13, fontWeight: '700', color: '#111' },
+    summaryDivider: { height: 1, backgroundColor: '#e5e7eb', marginVertical: 8 },
+    summaryTotalLabel: { fontSize: 14, fontWeight: '800', color: '#111' },
+    summaryTotalValue: { fontSize: 16, fontWeight: '900', color: '#111' },
+    uploadBtn: { flexDirection: 'row', alignItems: 'center', gap: 10, justifyContent: 'center', padding: 24, borderRadius: 16, borderWidth: 2, borderColor: '#e5e7eb', borderStyle: 'dashed', backgroundColor: '#f9fafb' },
+    infoBox: { flexDirection: 'row', gap: 10, marginTop: 16, padding: 14, backgroundColor: '#eef2ff', borderRadius: 12 },
+    infoText: { fontSize: 12, color: '#4f46e5', fontWeight: '500', lineHeight: 18, flex: 1 },
+    bottomActions: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', gap: 12, padding: 20, paddingBottom: 34, backgroundColor: 'white', borderTopWidth: 1, borderTopColor: '#f3f4f6' },
+    wizardBtnPrimary: { flex: 1, backgroundColor: '#111', paddingVertical: 16, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+    wizardBtnPrimaryText: { fontSize: 15, fontWeight: '800', color: 'white' },
+    wizardBtnSecondary: { paddingHorizontal: 24, paddingVertical: 16, borderRadius: 14, backgroundColor: 'white', borderWidth: 1, borderColor: '#d1d5db', alignItems: 'center', justifyContent: 'center' },
+    wizardBtnSecondaryText: { fontSize: 15, fontWeight: '700', color: '#374151' },
+    wizardInfoBox: { flexDirection: 'row', gap: 10, marginBottom: 20, padding: 14, backgroundColor: '#eef2ff', borderRadius: 12 },
+    wizardInfoText: { fontSize: 12, color: '#4f46e5', fontWeight: '500', lineHeight: 18, flex: 1 },
+
+    // UTILITIES WIZARD STYLES
+    utilityInputCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f9fafb', borderRadius: 16, padding: 14, borderWidth: 1, borderColor: '#f3f4f6', marginBottom: 12 },
+    utilityFreeCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f0fdf4', borderRadius: 16, padding: 14, borderWidth: 1, borderColor: '#bbf7d0', marginBottom: 12 },
+    utilityIconBox: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+    utilityName: { fontSize: 13, fontWeight: '800', color: '#111' },
+    utilityDesc: { fontSize: 11, color: '#6b7280', marginTop: 2 },
+    utilityInput: { backgroundColor: 'white', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, width: 60, paddingHorizontal: 8, paddingVertical: 10, fontSize: 13, color: '#111', fontWeight: 'bold', textAlign: 'center' },
+    utilityBadge: { backgroundColor: '#10b981', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
+    utilityBadgeText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
+    alreadyPaidCard: { marginTop: 16, padding: 16, backgroundColor: 'white', borderRadius: 16, borderWidth: 1, borderColor: '#e5e7eb', flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.02, shadowRadius: 10, elevation: 1 },
+    alreadyPaidTitle: { fontSize: 13, fontWeight: '800', color: '#111' },
+    alreadyPaidDesc: { fontSize: 11, color: '#6b7280', marginTop: 3 },
+    switchTrack: { width: 50, height: 28, borderRadius: 14, backgroundColor: '#d1d5db', padding: 2, justifyContent: 'center' },
+    switchTrackActive: { backgroundColor: '#10b981' },
+    switchThumb: { width: 24, height: 24, borderRadius: 12, backgroundColor: 'white', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, elevation: 2 },
+    switchThumbActive: { transform: [{ translateX: 22 }] },
+    alreadyPaidNote: { fontSize: 11, color: '#10b981', fontWeight: 'bold', marginTop: 8, marginLeft: 4 }
 });

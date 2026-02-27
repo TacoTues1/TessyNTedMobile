@@ -295,8 +295,12 @@ export default function Profile() {
           <Text style={styles.sectionHeader}>Management</Text>
           <View style={styles.menuSection}>
             <MenuRow icon="business-outline" label="All Properties" onPress={() => router.push('/(tabs)/allproperties')} />
-            <MenuRow icon="home-outline" label="My Properties" onPress={() => router.push('/(tabs)/landlordproperties')} />
-            <MenuRow icon="calendar-outline" label="Schedule" onPress={() => router.push('/(tabs)/schedule')} />
+            {profileRole === 'landlord' && (
+              <>
+                <MenuRow icon="home-outline" label="My Properties" onPress={() => router.push('/(tabs)/landlordproperties')} />
+                <MenuRow icon="calendar-outline" label="Schedule" onPress={() => router.push('/(tabs)/schedule')} />
+              </>
+            )}
             <MenuRow icon="people-outline" label="Bookings" onPress={() => router.push('/(tabs)/bookings')} />
             <MenuRow icon="hammer-outline" label="Maintenance" onPress={() => router.push('/(tabs)/maintenance')} />
             <MenuRow icon="card-outline" label="Payments" onPress={() => router.push('/(tabs)/payments')} />

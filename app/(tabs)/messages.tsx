@@ -58,136 +58,127 @@ export default function Messages() {
     const loadConversations = async (userId: string, role: string) => {
         setLoading(true);
 
+        // 1. Fetch all existing conversations
+        const { data: allConversations } = await supabase
+            .from('conversations')
+            .select('*, property:properties(title, address)')
+            .or(`landlord_id.eq.${userId},tenant_id.eq.${userId}`);
+
+        let existingConvs = allConversations || [];
+
+        // 2. Auto-create for active occupancies if missing
         if (role === 'tenant') {
-            // Tenant: Only show conversation with the landlord of their rented property
-            const { data: occupancy } = await supabase
+            let occupancy: any = null;
+            const { data: directOccupancy } = await supabase
                 .from('tenant_occupancies')
-                .select('*, property:properties(title, landlord), landlord:profiles!tenant_occupancies_landlord_id_fkey(id, first_name, last_name, avatar_url)')
+                .select('*, property:properties(title, landlord)')
                 .eq('tenant_id', userId)
                 .in('status', ['active', 'pending_end'])
                 .maybeSingle();
 
-            if (occupancy && occupancy.landlord) {
-                // Find or create conversation
-                const { data: conv } = await supabase
-                    .from('conversations')
-                    .select(`*, landlord:profiles!landlord_id(id, first_name, last_name, avatar_url), tenant:profiles!tenant_id(id, first_name, last_name, avatar_url)`)
-                    .or(`and(landlord_id.eq.${occupancy.landlord_id},tenant_id.eq.${userId}),and(landlord_id.eq.${userId},tenant_id.eq.${occupancy.landlord_id})`)
-                    .maybeSingle();
-
-                if (conv) {
-                    const formatted = {
-                        ...conv,
-                        otherUser: conv.landlord_id === userId ? conv.tenant : conv.landlord,
-                        propertyTitle: occupancy.property?.title
-                    };
-                    setConversations([formatted]);
-
-                    // Load last message for preview
-                    const { data: lastMsg } = await supabase
-                        .from('messages')
-                        .select('*')
-                        .eq('conversation_id', conv.id)
-                        .order('created_at', { ascending: false })
-                        .limit(1)
-                        .maybeSingle();
-                    if (lastMsg) {
-                        formatted.lastMessage = lastMsg;
-                        setConversations([formatted]);
+            occupancy = directOccupancy;
+            if (!occupancy) {
+                try {
+                    const API_URL = process.env.EXPO_PUBLIC_API_URL || '';
+                    const urlPrefix = API_URL.endsWith('/') ? API_URL.slice(0, -1) : API_URL;
+                    if (urlPrefix) {
+                        const res = await fetch(`${urlPrefix}/api/family-members?member_id=${userId}`);
+                        if (res.ok) {
+                            const fmData = await res.json();
+                            if (fmData && fmData.occupancy) occupancy = fmData.occupancy;
+                        }
                     }
-                } else {
-                    // Create conversation
-                    const { data: newConv } = await supabase
-                        .from('conversations')
-                        .insert({
-                            landlord_id: occupancy.landlord_id,
-                            tenant_id: userId,
-                        })
-                        .select(`*, landlord:profiles!landlord_id(id, first_name, last_name, avatar_url), tenant:profiles!tenant_id(id, first_name, last_name, avatar_url)`)
+                } catch (err) { }
+            }
+
+            if (occupancy && occupancy.landlord_id) {
+                const exists = existingConvs.find(c => c.landlord_id === occupancy.landlord_id && c.tenant_id === userId);
+                if (!exists) {
+                    const { data: newConv } = await supabase.from('conversations')
+                        .insert({ landlord_id: occupancy.landlord_id, tenant_id: userId })
+                        .select('*, property:properties(title, address)')
                         .single();
-
-                    if (newConv) {
-                        setConversations([{
-                            ...newConv,
-                            otherUser: newConv.landlord,
-                            propertyTitle: occupancy.property?.title
-                        }]);
-                    }
+                    if (newConv) existingConvs.push(newConv);
                 }
-            } else {
-                // Tenant has no active occupancy — no conversations
-                setConversations([]);
             }
         } else {
-            // Landlord: Show conversations with all tenants renting their properties
             const { data: occupancies } = await supabase
                 .from('tenant_occupancies')
-                .select('*, tenant:profiles!tenant_occupancies_tenant_id_fkey(id, first_name, last_name, avatar_url), property:properties(title)')
+                .select('*, property:properties(title)')
                 .eq('landlord_id', userId)
                 .in('status', ['active', 'pending_end']);
 
-            if (!occupancies || occupancies.length === 0) {
-                setConversations([]);
-                setLoading(false);
-                return;
-            }
-
-            const convList: any[] = [];
-
-            for (const occ of occupancies) {
-                // Find or create conversation for each tenant
-                const { data: conv } = await supabase
-                    .from('conversations')
-                    .select(`*, landlord:profiles!landlord_id(id, first_name, last_name, avatar_url), tenant:profiles!tenant_id(id, first_name, last_name, avatar_url)`)
-                    .or(`and(landlord_id.eq.${userId},tenant_id.eq.${occ.tenant_id}),and(landlord_id.eq.${occ.tenant_id},tenant_id.eq.${userId})`)
-                    .maybeSingle();
-
-                if (conv) {
-                    // Load last message
-                    const { data: lastMsg } = await supabase
-                        .from('messages')
-                        .select('*')
-                        .eq('conversation_id', conv.id)
-                        .order('created_at', { ascending: false })
-                        .limit(1)
-                        .maybeSingle();
-
-                    convList.push({
-                        ...conv,
-                        otherUser: conv.landlord_id === userId ? conv.tenant : conv.landlord,
-                        propertyTitle: occ.property?.title,
-                        lastMessage: lastMsg || null
-                    });
-                } else {
-                    // Create conversation
-                    const { data: newConv } = await supabase
-                        .from('conversations')
-                        .insert({
-                            landlord_id: userId,
-                            tenant_id: occ.tenant_id,
-                        })
-                        .select(`*, landlord:profiles!landlord_id(id, first_name, last_name, avatar_url), tenant:profiles!tenant_id(id, first_name, last_name, avatar_url)`)
-                        .single();
-
-                    if (newConv) {
-                        convList.push({
-                            ...newConv,
-                            otherUser: newConv.tenant,
-                            propertyTitle: occ.property?.title
-                        });
+            if (occupancies) {
+                for (const occ of occupancies) {
+                    const exists = existingConvs.find(c => c.landlord_id === userId && c.tenant_id === occ.tenant_id);
+                    if (!exists) {
+                        const { data: newConv } = await supabase.from('conversations')
+                            .insert({ landlord_id: userId, tenant_id: occ.tenant_id })
+                            .select('*, property:properties(title, address)')
+                            .single();
+                        if (newConv) existingConvs.push(newConv);
                     }
                 }
             }
-
-            // Sort by most recent message
-            convList.sort((a, b) => {
-                const aTime = a.lastMessage?.created_at || a.updated_at || '';
-                const bTime = b.lastMessage?.created_at || b.updated_at || '';
-                return new Date(bTime).getTime() - new Date(aTime).getTime();
-            });
-
-            setConversations(convList);
         }
+
+        // 3. Filter hidden
+        existingConvs = existingConvs.filter((conv: any) => {
+            const isLandlord = conv.landlord_id === userId;
+            const isTenant = conv.tenant_id === userId;
+            if (isLandlord && conv.hidden_by_landlord) return false;
+            if (isTenant && conv.hidden_by_tenant) return false;
+            return true;
+        });
+
+        if (existingConvs.length === 0) {
+            setConversations([]);
+            setLoading(false);
+            return;
+        }
+
+        // 4. Enrich with profiles and last messages
+        const userIds = new Set<string>();
+        existingConvs.forEach((conv: any) => {
+            userIds.add(conv.landlord_id);
+            userIds.add(conv.tenant_id);
+        });
+
+        const { data: profiles } = await supabase
+            .from('profiles')
+            .select('id, first_name, last_name, avatar_url')
+            .in('id', Array.from(userIds));
+
+        const profileMap: any = {};
+        profiles?.forEach((p: any) => { profileMap[p.id] = p; });
+
+        const enrichedConvs = await Promise.all(existingConvs.map(async (conv: any) => {
+            const isLandlord = conv.landlord_id === userId;
+            const otherUserId = isLandlord ? conv.tenant_id : conv.landlord_id;
+
+            const { data: lastMsg } = await supabase
+                .from('messages')
+                .select('*')
+                .eq('conversation_id', conv.id)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+            return {
+                ...conv,
+                otherUser: profileMap[otherUserId],
+                propertyTitle: conv.property?.title || '',
+                lastMessage: lastMsg || null
+            };
+        }));
+
+        enrichedConvs.sort((a, b) => {
+            const aTime = a.lastMessage?.created_at || a.updated_at || '';
+            const bTime = b.lastMessage?.created_at || b.updated_at || '';
+            return new Date(bTime).getTime() - new Date(aTime).getTime();
+        });
+
+        setConversations(enrichedConvs);
         setLoading(false);
     };
 

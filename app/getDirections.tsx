@@ -11,14 +11,27 @@ import {
   TextInput, TouchableOpacity,
   View
 } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_DEFAULT, UrlTile } from 'react-native-maps';
+// MapView cannot be imported directly on web without extra config.
+let MapView: any;
+let Marker: any;
+let Polyline: any;
+let PROVIDER_DEFAULT: any;
+let UrlTile: any;
+if (Platform.OS !== 'web') {
+  const Maps = require('react-native-maps');
+  MapView = Maps.default;
+  Marker = Maps.Marker;
+  Polyline = Maps.Polyline;
+  PROVIDER_DEFAULT = Maps.PROVIDER_DEFAULT;
+  UrlTile = Maps.UrlTile;
+}
 
 const { width, height } = Dimensions.get('window');
 
 export default function GetDirections() {
   const router = useRouter();
   const params = useLocalSearchParams();
-  const mapRef = useRef<MapView>(null);
+  const mapRef = useRef<any>(null);
 
   const searchTimeout = useRef<any>(null);
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
@@ -316,67 +329,73 @@ export default function GetDirections() {
   return (
     <View style={styles.container}>
       {/* 1. Map Layer with OSM Tiles */}
-      <MapView
-        ref={mapRef}
-        provider={PROVIDER_DEFAULT}
-        style={StyleSheet.absoluteFillObject}
-        initialRegion={{
-          latitude: 10.3157, longitude: 123.8854, latitudeDelta: 0.0922, longitudeDelta: 0.0421
-        }}
-        mapType={Platform.OS === 'android' ? 'none' : 'standard'}
-        rotateEnabled={true}
-        pitchEnabled={true}
-      >
-        <UrlTile urlTemplate="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" maximumZ={19} zIndex={-1} />
+      {Platform.OS !== 'web' && MapView ? (
+        <MapView
+          ref={mapRef}
+          provider={PROVIDER_DEFAULT}
+          style={StyleSheet.absoluteFillObject}
+          initialRegion={{
+            latitude: 10.3157, longitude: 123.8854, latitudeDelta: 0.0922, longitudeDelta: 0.0421
+          }}
+          mapType={Platform.OS === 'android' ? 'none' : 'standard'}
+          rotateEnabled={true}
+          pitchEnabled={true}
+        >
+          <UrlTile urlTemplate="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" maximumZ={19} zIndex={-1} />
 
-        {/* User Marker with Animation */}
-        {userLocation && (
-          <Marker coordinate={userLocation} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={styles.userMarkerContainer}>
-              {/* Animated Ping Circle */}
-              <Animated.View style={[styles.pingCircle, { transform: [{ scale: pingAnim }], opacity: fadeAnim }]} />
-              {/* Outer White Border */}
-              <View style={styles.userMarkerOuter}>
-                {/* Directional Arrow or Dot */}
-                <View style={[styles.userMarkerInner, { transform: [{ rotate: `${userLocation.heading || 0}deg` }] }]}>
-                  {/* Triangle for direction */}
-                  <View style={styles.directionArrow} />
+          {/* User Marker with Animation */}
+          {userLocation && (
+            <Marker coordinate={userLocation} anchor={{ x: 0.5, y: 0.5 }}>
+              <View style={styles.userMarkerContainer}>
+                {/* Animated Ping Circle */}
+                <Animated.View style={[styles.pingCircle, { transform: [{ scale: pingAnim }], opacity: fadeAnim }]} />
+                {/* Outer White Border */}
+                <View style={styles.userMarkerOuter}>
+                  {/* Directional Arrow or Dot */}
+                  <View style={[styles.userMarkerInner, { transform: [{ rotate: `${userLocation.heading || 0}deg` }] }]}>
+                    {/* Triangle for direction */}
+                    <View style={styles.directionArrow} />
+                  </View>
                 </View>
               </View>
-            </View>
-          </Marker>
-        )}
+            </Marker>
+          )}
 
-        {/* Destination Marker */}
-        {destLocation && (
-          <Marker coordinate={destLocation} title="Destination" pinColor="red" />
-        )}
+          {/* Destination Marker */}
+          {destLocation && (
+            <Marker coordinate={destLocation} title="Destination" pinColor="red" />
+          )}
 
-        {/* Render Alternate Routes (Gray) */}
-        {routesData[selectedMode].map((route: any, index: number) => {
-          if (index === selectedRouteIndex) return null; // Skip selected
-          return (
+          {/* Render Alternate Routes (Gray) */}
+          {routesData[selectedMode].map((route: any, index: number) => {
+            if (index === selectedRouteIndex) return null; // Skip selected
+            return (
+              <Polyline
+                key={`alt-${index}`}
+                coordinates={getPolylineCoords(route)}
+                strokeWidth={5}
+                strokeColor="#9ca3af" // Gray
+                tappable={true}
+                onPress={() => setSelectedRouteIndex(index)}
+              />
+            );
+          })}
+
+          {/* Render Selected Route (Colored) */}
+          {routesData[selectedMode].length > selectedRouteIndex && (
             <Polyline
-              key={`alt-${index}`}
-              coordinates={getPolylineCoords(route)}
-              strokeWidth={5}
-              strokeColor="#9ca3af" // Gray
-              tappable={true}
-              onPress={() => setSelectedRouteIndex(index)}
+              coordinates={getPolylineCoords(routesData[selectedMode][selectedRouteIndex])}
+              strokeWidth={7}
+              strokeColor={selectedMode === 'bike' ? '#7c3aed' : selectedMode === 'foot' ? '#059669' : '#111827'} // Black/Purple/Green
+              zIndex={10}
             />
-          );
-        })}
-
-        {/* Render Selected Route (Colored) */}
-        {routesData[selectedMode].length > selectedRouteIndex && (
-          <Polyline
-            coordinates={getPolylineCoords(routesData[selectedMode][selectedRouteIndex])}
-            strokeWidth={7}
-            strokeColor={selectedMode === 'bike' ? '#7c3aed' : selectedMode === 'foot' ? '#059669' : '#111827'} // Black/Purple/Green
-            zIndex={10}
-          />
-        )}
-      </MapView>
+          )}
+        </MapView>
+      ) : (
+        <View style={[StyleSheet.absoluteFillObject, { justifyContent: 'center', alignItems: 'center' }]}>
+          <Text style={{ color: '#666' }}>Map is not available on this platform</Text>
+        </View>
+      )}
 
       {/* 2. Back Button */}
       <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>

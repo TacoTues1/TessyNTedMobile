@@ -7,12 +7,13 @@ import { supabase } from '../lib/supabase';
 import LoginForm from '../components/auth/LoginForm';
 import OtpForm from '../components/auth/OtpForm';
 import RegisterForm from '../components/auth/RegisterForm';
+import RegisterLandlordForm from '../components/auth/RegisterLandlordForm';
 
 export default function AuthScreen() {
     const router = useRouter();
     const { initialView } = useLocalSearchParams<{ initialView: string }>();
-    const [view, setView] = useState<'login' | 'register' | 'otp'>(
-        (initialView === 'register' || initialView === 'otp') ? initialView : 'login'
+    const [view, setView] = useState<'login' | 'register' | 'register-landlord' | 'otp'>(
+        (initialView === 'register' || initialView === 'otp' || initialView === 'register-landlord') ? initialView as any : 'login'
     );
     const [loading, setLoading] = useState(false);
     const [pendingEmail, setPendingEmail] = useState('');
@@ -20,13 +21,27 @@ export default function AuthScreen() {
 
     // Listen for auth state changes - redirect to dashboard when logged in
     useEffect(() => {
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-            if (session) {
+        let isMounted = true;
+
+        // Safety Clear on load
+        const clearIfLoggedOut = async () => {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session && isMounted) {
+                router.replace('/(tabs)');
+            }
+        };
+        clearIfLoggedOut();
+
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+            if (event === 'SIGNED_IN' && session && isMounted) {
                 router.replace('/(tabs)');
             }
         });
 
-        return () => subscription.unsubscribe();
+        return () => {
+            isMounted = false;
+            subscription.unsubscribe();
+        };
     }, []);
 
     const handleRegisterSuccess = (email: string, metaData: any) => {
@@ -52,13 +67,15 @@ export default function AuthScreen() {
                                 resizeMode="contain"
                             />
                         </View>
-                        <Text style={styles.brandName}>TessyNTed</Text>
+                        <Text style={styles.brandName}>Abalay</Text>
                         <Text style={styles.headerSubtitle}>
                             {view === 'login'
                                 ? 'Sign in to your account'
                                 : view === 'register'
                                     ? 'Create your account'
-                                    : 'Verify your email'}
+                                    : view === 'register-landlord'
+                                        ? 'Register as Landlord'
+                                        : 'Verify your email'}
                         </Text>
                     </View>
 
@@ -75,6 +92,17 @@ export default function AuthScreen() {
                             loading={loading}
                             setLoading={setLoading}
                             onSwitchToLogin={() => setView('login')}
+                            onSwitchToLandlord={() => setView('register-landlord')}
+                            onRegisterSuccess={handleRegisterSuccess}
+                        />
+                    )}
+
+                    {view === 'register-landlord' && (
+                        <RegisterLandlordForm
+                            loading={loading}
+                            setLoading={setLoading}
+                            onSwitchToLogin={() => setView('login')}
+                            onSwitchToRegister={() => setView('register')}
                             onRegisterSuccess={handleRegisterSuccess}
                         />
                     )}
@@ -114,6 +142,7 @@ const styles = StyleSheet.create({
     brandName: {
         fontSize: 37, fontWeight: '900', color: '#111',
         letterSpacing: -0.5, marginBottom: 6,
+        fontFamily: 'Pacifico_400Regular'
     },
     headerSubtitle: {
         fontSize: 14, color: '#9ca3af', fontWeight: '500',

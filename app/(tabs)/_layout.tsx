@@ -4,6 +4,17 @@ import React, { useEffect, useRef, useState } from 'react';
 import { AppState, Platform, Text, View } from 'react-native';
 import { supabase } from '../../lib/supabase';
 
+// Helper to avoid simultaneous getSession calls during mount which causes token refresh race conditions
+let sessionPromise: Promise<any> | null = null;
+const getSafeSession = () => {
+  if (!sessionPromise) {
+    sessionPromise = supabase.auth.getSession().finally(() => {
+      setTimeout(() => { sessionPromise = null; }, 2000); // Clear cache after a brief delay
+    });
+  }
+  return sessionPromise;
+};
+
 function NotificationsTabIcon({ color, focused }: { color: string; focused: boolean }) {
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const appState = useRef(AppState.currentState);
@@ -14,33 +25,37 @@ function NotificationsTabIcon({ color, focused }: { color: string; focused: bool
     let intervalId: any;
 
     const setupBadge = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-      const userId = session.user.id;
+      try {
+        const { data: { session }, error } = await getSafeSession();
+        if (error || !session) return;
+        const userId = session.user.id;
 
-      const fetchCount = async () => {
-        const { count, error } = await supabase
-          .from('notifications')
-          .select('*', { count: 'exact', head: true })
-          .eq('recipient', userId)
-          .eq('read', false);
+        const fetchCount = async () => {
+          const { count, error } = await supabase
+            .from('notifications')
+            .select('*', { count: 'exact', head: true })
+            .eq('recipient', userId)
+            .eq('read', false);
 
-        if (!error && isMounted) {
-          setUnreadCount(count || 0);
-        }
-      };
+          if (!error && isMounted) {
+            setUnreadCount(count || 0);
+          }
+        };
 
-      fetchCount();
-      intervalId = setInterval(fetchCount, 5000);
+        fetchCount();
+        intervalId = setInterval(fetchCount, 5000);
 
-      channel = supabase
-        .channel(`badge-${userId}`)
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'notifications', filter: `recipient=eq.${userId}` },
-          () => fetchCount()
-        )
-        .subscribe();
+        channel = supabase
+          .channel(`badge-${userId}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'notifications', filter: `recipient=eq.${userId}` },
+            () => fetchCount()
+          )
+          .subscribe();
+      } catch (err) {
+        console.warn('NotificationsTabIcon setupBadge error:', err);
+      }
     };
 
     setupBadge();
@@ -103,33 +118,37 @@ function MessagesTabIcon({ color, focused }: { color: string; focused: boolean }
     let intervalId: any;
 
     const setupBadge = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-      const userId = session.user.id;
+      try {
+        const { data: { session }, error } = await getSafeSession();
+        if (error || !session) return;
+        const userId = session.user.id;
 
-      const fetchCount = async () => {
-        const { count, error } = await supabase
-          .from('messages')
-          .select('*', { count: 'exact', head: true })
-          .eq('receiver_id', userId)
-          .eq('read', false);
+        const fetchCount = async () => {
+          const { count, error } = await supabase
+            .from('messages')
+            .select('*', { count: 'exact', head: true })
+            .eq('receiver_id', userId)
+            .eq('read', false);
 
-        if (!error && isMounted) {
-          setUnreadCount(count || 0);
-        }
-      };
+          if (!error && isMounted) {
+            setUnreadCount(count || 0);
+          }
+        };
 
-      fetchCount();
-      intervalId = setInterval(fetchCount, 5000);
+        fetchCount();
+        intervalId = setInterval(fetchCount, 5000);
 
-      channel = supabase
-        .channel(`msg-badge-${userId}`)
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'messages', filter: `receiver_id=eq.${userId}` },
-          () => fetchCount()
-        )
-        .subscribe();
+        channel = supabase
+          .channel(`msg-badge-${userId}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'messages', filter: `receiver_id=eq.${userId}` },
+            () => fetchCount()
+          )
+          .subscribe();
+      } catch (err) {
+        console.warn('MessagesTabIcon setupBadge error:', err);
+      }
     };
 
     setupBadge();
@@ -217,30 +236,7 @@ export default function TabLayout() {
           tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "business" : "business-outline"} size={22} color={color} />
         }}
       />
-      <Tabs.Screen
-        name="landlordproperties"
-        options={{
-          title: '',
-          tabBarIcon: ({ color }) => (
-            <View style={{
-              width: 40,
-              height: 40,
-              borderRadius: 20,
-              backgroundColor: '#000',
-              justifyContent: 'center',
-              alignItems: 'center',
-              marginTop: 10,
-              shadowColor: "#000",
-              shadowOffset: { width: 0, height: 4 },
-              shadowOpacity: 0.3,
-              shadowRadius: 4.65,
-              elevation: 8,
-            }}>
-              <Ionicons name="add" size={24} color="white" />
-            </View>
-          ),
-        }}
-      />
+      <Tabs.Screen name="landlordproperties" options={{ href: null, tabBarStyle: { ...TAB_STYLE, display: 'flex' } }} />
       <Tabs.Screen
         name="messages"
         options={{

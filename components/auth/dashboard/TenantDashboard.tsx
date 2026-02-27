@@ -59,6 +59,19 @@ export default function TenantDashboard({ session, profile }: any) {
     const [securityDepositProcessing, setSecurityDepositProcessing] = useState(false);
     const [totalRentPaid, setTotalRentPaid] = useState(0);
 
+    // Family State
+    const [isFamilyMember, setIsFamilyMember] = useState(false);
+    const [familyPaidBills, setFamilyPaidBills] = useState<any[]>([]);
+    const [familyMembers, setFamilyMembers] = useState<any[]>([]);
+    const [showFamilyModal, setShowFamilyModal] = useState(false);
+    const [familySearchQuery, setFamilySearchQuery] = useState('');
+    const [familySearchResults, setFamilySearchResults] = useState<any[]>([]);
+    const [familySearching, setFamilySearching] = useState(false);
+    const [addingMember, setAddingMember] = useState<string | null>(null);
+    const [removingMember, setRemovingMember] = useState<string | null>(null);
+    const [confirmRemoveMember, setConfirmRemoveMember] = useState<string | null>(null);
+    const [loadingFamily, setLoadingFamily] = useState(false);
+
     // Renewals
     const [daysUntilContractEnd, setDaysUntilContractEnd] = useState<number | null>(null);
     const [canRenew, setCanRenew] = useState(false);
@@ -180,6 +193,42 @@ export default function TenantDashboard({ session, profile }: any) {
             }
             console.log("loadOccupancyData: Fetching for user:", session.user.id);
 
+            // 1. Check if user is a family member via API (bypasses RLS)
+            const API_URL = process.env.EXPO_PUBLIC_API_URL;
+            if (API_URL) {
+                try {
+                    const fmRes = await fetch(`${API_URL}api/family-members?member_id=${session.user.id}`);
+                    if (fmRes.ok) {
+                        const fmData = await fmRes.json();
+                        if (fmData.occupancy) {
+                            console.log("loadOccupancyData: User is a family member.");
+                            setIsFamilyMember(true);
+                            setOccupancy(fmData.occupancy);
+                            setPendingPayments(fmData.pendingPayments || []);
+                            setPaymentHistory(fmData.paymentHistory || []);
+                            setTenantBalance(fmData.tenantBalance || 0);
+                            setLastPayment(fmData.lastPaidBill || null);
+                            setSecurityDepositPaid(fmData.securityDepositPaid || false);
+                            if (fmData.allPaidBills) setFamilyPaidBills(fmData.allPaidBills);
+
+                            if (fmData.occupancy.contract_end_date) {
+                                const endDate = new Date(fmData.occupancy.contract_end_date);
+                                const today = new Date();
+                                const diffDays = Math.floor((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                                setDaysUntilContractEnd(diffDays);
+                            }
+                            // Calculate financials
+                            calculateNextPayment(fmData.occupancy.id, fmData.occupancy, fmData.pendingPayments || [], fmData.allPaidBills || []);
+                            return; // Stop here for family members
+                        }
+                    }
+                } catch (err) {
+                    console.error('Family member check error:', err);
+                }
+            }
+
+            // 2. Not a family member, proceed normally
+            setIsFamilyMember(false);
             const { data: occs, error } = await supabase.from('tenant_occupancies')
                 .select('*, property:properties(*), landlord:profiles!tenant_occupancies_landlord_id_fkey(*)')
                 .eq('tenant_id', session.user.id)
@@ -233,10 +282,11 @@ export default function TenantDashboard({ session, profile }: any) {
                 // Contract End Logic
                 if (occ.contract_end_date) {
                     console.log("Found contract end date:", occ.contract_end_date);
+                    // Match website's INLINE JSX calculation (TenantDashboard.js line 1700-1702)
+                    // Website does NOT use setHours normalization - raw date diff + Math.floor
                     const endDate = new Date(occ.contract_end_date);
                     const today = new Date();
-                    today.setHours(0, 0, 0, 0); endDate.setHours(0, 0, 0, 0);
-                    const diffDays = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                    const diffDays = Math.floor((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
                     console.log("Calculated days until end:", diffDays);
                     setDaysUntilContractEnd(diffDays);
                     setCanRenew(diffDays > 29 && !occ.renewal_requested);
@@ -255,27 +305,41 @@ export default function TenantDashboard({ session, profile }: any) {
     };
 
     const loadFinancials = async (occupancyId: string, occData: any) => {
-        // Pending Bills (Status: 'pending', 'pending_confirmation', 'rejected')
-        // We exclude 'cancelled' and 'paid'
-        const { data: allBills } = await supabase.from('payment_requests')
+        // --- PENDING PAYMENTS ---
+        // Load pending payments matching website logic (loadPendingPayments)
+        const { data: pendingData } = await supabase.from('payment_requests')
             .select('*')
             .eq('tenant', session.user.id)
+            .neq('status', 'paid')
             .neq('status', 'cancelled')
             .order('due_date', { ascending: true });
 
-        const bills = allBills || [];
-
-        // Separation
-        const pending = bills.filter((b: any) => b.status === 'pending' || b.status === 'rejected' || b.status === 'pending_confirmation');
-        const history = bills.filter((b: any) => b.status === 'paid');
-
+        // Filter to this occupancy or null (matching website logic)
+        const pending = (pendingData || []).filter((b: any) =>
+            b.occupancy_id === occupancyId || !b.occupancy_id
+        );
         setPendingPayments(pending);
 
-        // Filter history for current occupancy
-        const occupancyHistory = history.filter((h: any) =>
-            h.occupancy_id === occupancyId || (occData.property_id && h.property_id === occData.property_id)
-        );
+        // --- PAYMENT HISTORY ---
+        // Fetch ALL paid bills for this tenant, then filter client-side
+        // using website's smart filter (calculateNextPayment lines 474-485):
+        // Include bills with matching occupancy_id OR null occupancy_id with matching property_id
+        // Exclude bills belonging to a DIFFERENT occupancy
+        const { data: allPaidBills } = await supabase.from('payment_requests')
+            .select('*')
+            .eq('tenant', session.user.id)
+            .eq('status', 'paid')
+            .order('due_date', { ascending: true });
 
+        const occupancyHistory = (allPaidBills || []).filter((bill: any) => {
+            // If bill has an occupancy_id that doesn't match current, EXCLUDE
+            if (occupancyId && bill.occupancy_id && bill.occupancy_id !== occupancyId) return false;
+            // Match by occupancy_id
+            if (occupancyId && bill.occupancy_id === occupancyId) return true;
+            // Match by property_id if bill has no occupancy_id (e.g. legacy/auto-created bills)
+            if (occData.property_id && bill.property_id === occData.property_id && !bill.occupancy_id) return true;
+            return false;
+        });
         setPaymentHistory(occupancyHistory);
 
         // Total Paid Calculation
@@ -290,12 +354,29 @@ export default function TenantDashboard({ session, profile }: any) {
             .maybeSingle();
         setTenantBalance(balance?.amount || 0);
 
-        // Last Payment (Rent)
-        const last = occupancyHistory.filter((h: any) => h.rent_amount > 0).pop();
-        setLastPayment(last);
+        // --- LAST PAYMENT ---
+        // Match website query (loadTenantOccupancy lines 1061-1072):
+        // Direct query with strict occupancy_id, rent_amount > 0, ordered by due_date DESC
+        const { data: lastPaidBill } = await supabase.from('payment_requests')
+            .select('*')
+            .eq('tenant', session.user.id)
+            .eq('occupancy_id', occupancyId)
+            .eq('status', 'paid')
+            .gt('rent_amount', 0)
+            .order('due_date', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+        setLastPayment(lastPaidBill);
 
-        // Security Deposit Paid?
-        const depositBills = bills.filter((h: any) => Number(h.security_deposit_amount) > 0 && h.occupancy_id === occupancyId);
+        // --- SECURITY DEPOSIT ---
+        const { data: allBills } = await supabase.from('payment_requests')
+            .select('*')
+            .eq('tenant', session.user.id)
+            .eq('occupancy_id', occupancyId)
+            .neq('status', 'cancelled');
+
+        const bills = allBills || [];
+        const depositBills = bills.filter((h: any) => Number(h.security_deposit_amount) > 0);
 
         const paidBill = depositBills.find((b: any) => b.status === 'paid');
         const processingBill = depositBills.find((b: any) => b.status === 'pending_confirmation');
@@ -304,7 +385,6 @@ export default function TenantDashboard({ session, profile }: any) {
         setSecurityDepositPaid(!!paidBill);
 
         if (!paidBill && !processingBill) {
-            // Fallback: Use occupancy history search
             const paidDep = occupancyHistory.some((h: any) => Number(h.security_deposit_amount) > 0);
             setSecurityDepositPaid(!!paidDep);
         }
@@ -317,7 +397,8 @@ export default function TenantDashboard({ session, profile }: any) {
         const endDate = new Date(occupancy.contract_end_date);
         const today = new Date();
         endDate.setHours(0, 0, 0, 0); today.setHours(0, 0, 0, 0);
-        const diffDays = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        // Use Math.floor to match website calculation
+        const diffDays = Math.floor((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
         const renewalActive = occupancy.renewal_requested || occupancy.renewal_status === 'pending' || occupancy.renewal_status === 'approved';
 
         if (diffDays <= 28 && diffDays > 0 && !renewalActive) {
@@ -367,67 +448,401 @@ export default function TenantDashboard({ session, profile }: any) {
         }
     };
 
-    const calculateNextPayment = async (occupancyId: string, currentOccupancy: any) => {
-        // 1. Pending Bills
-        const pendingBill = pendingPayments.find(b => {
-            if (b.occupancy_id === occupancyId) return true;
-            if (currentOccupancy?.property_id && b.property_id === currentOccupancy.property_id) return true;
-            return false;
-        });
+    const calculateNextPayment = async (occupancyId: string, currentOccupancy: any, overridePending?: any[], overridePaid?: any[]) => {
+        // ========== PORTED FROM WEBSITE calculateNextPayment ==========
+        // This matches the website's full logic for accuracy
 
-        if (pendingBill) {
-            if (pendingBill.status === 'pending_confirmation') {
-                setNextPaymentDate("Payment Processing");
-            } else {
-                setNextPaymentDate(new Date(pendingBill.due_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }));
-            }
-            setLastRentPeriod("N/A");
-            return;
+        // 1. Check for pending bills
+        let allPendingBills = overridePending;
+        if (!allPendingBills && !isFamilyMember) {
+            const { data } = await supabase
+                .from('payment_requests')
+                .select('due_date, is_move_in_payment, is_renewal_payment, occupancy_id, property_id, status')
+                .eq('tenant', session.user.id)
+                .eq('status', 'pending')
+                .gt('rent_amount', 0)
+                .order('due_date', { ascending: true });
+            allPendingBills = data || [];
         }
 
-        // 2. Calculated from History
-        // Use component state paymentHistory which is now filtered
-        const paidBills = paymentHistory.sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime());
-
-        const lastBill = paidBills.length > 0 ? paidBills[paidBills.length - 1] : null;
-
-        if (lastBill) {
-            const rent = parseFloat(lastBill.rent_amount || 0);
-            const advance = parseFloat(lastBill.advance_amount || 0);
-            let monthsCovered = 1;
-
-            if (rent > 0 && advance > 0) {
-                monthsCovered = 1 + Math.floor(advance / rent);
+        let pendingBill: any = null;
+        if (allPendingBills && allPendingBills.length > 0) {
+            pendingBill = allPendingBills.find((bill: any) => {
+                if (occupancyId && bill.occupancy_id === occupancyId) return true;
+                if (currentOccupancy?.property_id && bill.property_id === currentOccupancy.property_id) return true;
+                if (!bill.occupancy_id && currentOccupancy?.property_id && bill.property_id === currentOccupancy.property_id) return true;
+                return false;
+            });
+            if (!pendingBill && allPendingBills.length > 0) {
+                pendingBill = allPendingBills[0];
             }
+        }
 
-            const nextDue = new Date(lastBill.due_date);
-            nextDue.setMonth(nextDue.getMonth() + monthsCovered);
+        // 2. Get ALL paid/confirming bills
+        let allPaidBills = overridePaid || familyPaidBills;
+        if ((!allPaidBills || allPaidBills.length === 0) && !isFamilyMember) {
+            const { data } = await supabase
+                .from('payment_requests')
+                .select('due_date, rent_amount, advance_amount, is_renewal_payment, is_advance_payment, is_move_in_payment, property_id, occupancy_id, status')
+                .eq('tenant', session.user.id)
+                .in('status', ['paid', 'pending_confirmation'])
+                .gt('rent_amount', 0)
+                .order('due_date', { ascending: false });
+            allPaidBills = data || [];
+        }
 
-            // Check Contract End
-            if (currentOccupancy.contract_end_date) {
-                const endDate = new Date(currentOccupancy.contract_end_date);
-                const paidPeriodEnd = new Date(lastBill.due_date);
-                paidPeriodEnd.setMonth(paidPeriodEnd.getMonth() + monthsCovered);
+        // Filter to only bills for this occupancy (STRICT filter like website)
+        let filteredBills: any[] = [];
+        if (allPaidBills && allPaidBills.length > 0) {
+            filteredBills = allPaidBills.filter((bill: any) => {
+                if (occupancyId && bill.occupancy_id && bill.occupancy_id !== occupancyId) return false;
+                if (occupancyId && bill.occupancy_id === occupancyId) return true;
+                if (currentOccupancy?.property_id && bill.property_id === currentOccupancy.property_id && !bill.occupancy_id) return true;
+                return false;
+            });
+        }
 
-                if (paidPeriodEnd >= endDate) {
-                    setNextPaymentDate("All Paid - Contract Ending");
-                    setLastRentPeriod(new Date(lastBill.due_date).toLocaleDateString());
+        // Prioritize bills with advance_amount (like website)
+        const lastBill = filteredBills?.find((bill: any) => bill.advance_amount > 0 && bill.is_renewal_payment) ||
+            filteredBills?.find((bill: any) => bill.advance_amount > 0) ||
+            filteredBills?.[0];
+
+        // 3. CRITICAL: For newly assigned tenants with NO paid bills
+        if (!lastBill) {
+            if (pendingBill && pendingBill.due_date && pendingBill.is_renewal_payment !== true) {
+                const formattedDate = new Date(pendingBill.due_date).toLocaleDateString('en-US', {
+                    month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC'
+                });
+                setNextPaymentDate(formattedDate);
+                setLastRentPeriod("N/A");
+                return;
+            }
+            // Fallback: use start_date
+            if (currentOccupancy?.start_date) {
+                const formattedDate = new Date(currentOccupancy.start_date).toLocaleDateString('en-US', {
+                    month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC'
+                });
+                setNextPaymentDate(formattedDate);
+                setLastRentPeriod("N/A");
+                return;
+            }
+        }
+
+        const baseDateString = currentOccupancy?.start_date;
+
+        if (baseDateString) {
+            const startDate = new Date(baseDateString);
+            let nextDue: Date;
+
+            if (lastBill && lastBill.due_date) {
+                const rentAmount = parseFloat(lastBill.rent_amount || 0);
+                const advanceAmount = parseFloat(lastBill.advance_amount || 0);
+
+                let monthsCovered = 1;
+                if (rentAmount > 0 && advanceAmount > 0) {
+                    monthsCovered = 1 + Math.floor(advanceAmount / rentAmount);
+                }
+
+                // Preserve day of month (matching website logic)
+                nextDue = new Date(lastBill.due_date);
+                if (isNaN(nextDue.getTime())) {
+                    nextDue = new Date(startDate);
+                } else {
+                    const currentMonth = nextDue.getMonth();
+                    const currentYear = nextDue.getFullYear();
+                    const currentDay = nextDue.getDate();
+
+                    const targetMonth = currentMonth + monthsCovered;
+                    const targetYear = currentYear + Math.floor(targetMonth / 12);
+                    let finalMonth = targetMonth % 12;
+                    if (finalMonth < 0) finalMonth += 12;
+
+                    nextDue.setFullYear(targetYear);
+                    nextDue.setMonth(finalMonth);
+                    nextDue.setDate(currentDay);
+                }
+
+                // Set calculated date
+                if (nextDue && !isNaN(nextDue.getTime())) {
+                    const formattedNextDue = nextDue.toLocaleDateString('en-US', {
+                        month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC'
+                    });
+
+                    // Check contract end
+                    if (currentOccupancy.contract_end_date && lastBill) {
+                        const endDate = new Date(currentOccupancy.contract_end_date);
+                        const isMoveInPayment = lastBill.is_move_in_payment === true;
+
+                        let monthsCoveredByPayment = 1;
+                        if (rentAmount > 0 && advanceAmount > 0) {
+                            monthsCoveredByPayment = 1 + Math.floor(advanceAmount / rentAmount);
+                        }
+
+                        const paidPeriodEnd = new Date(lastBill.due_date);
+                        paidPeriodEnd.setMonth(paidPeriodEnd.getMonth() + monthsCoveredByPayment);
+
+                        // Move-in payments only cover first month, never show "All Paid"
+                        if (isMoveInPayment) {
+                            setNextPaymentDate(formattedNextDue);
+                            const lastDate = new Date(lastBill.due_date);
+                            setLastRentPeriod(lastDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }));
+                            return;
+                        }
+
+                        if (paidPeriodEnd >= endDate) {
+                            // Check for any remaining pending bills before declaring "All Paid"
+                            if (pendingBill && pendingBill.due_date) {
+                                setNextPaymentDate(new Date(pendingBill.due_date).toLocaleDateString('en-US', {
+                                    month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC'
+                                }));
+                                setLastRentPeriod(new Date(lastBill.due_date).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }));
+                                return;
+                            }
+                            setNextPaymentDate("All Paid - Contract Ending");
+                            setLastRentPeriod(new Date(lastBill.due_date).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }));
+                            return;
+                        }
+                    }
+
+                    setNextPaymentDate(formattedNextDue);
+                    if (lastBill) {
+                        const lastDate = new Date(lastBill.due_date);
+                        setLastRentPeriod(lastDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }));
+                    } else {
+                        setLastRentPeriod("N/A");
+                    }
                     return;
                 }
+            } else {
+                // No lastBill found — check pending bills for newly assigned tenants
+                if (pendingBill && pendingBill.due_date && pendingBill.is_renewal_payment !== true) {
+                    setNextPaymentDate(new Date(pendingBill.due_date).toLocaleDateString('en-US', {
+                        month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC'
+                    }));
+                    setLastRentPeriod("N/A");
+                    return;
+                }
+                nextDue = new Date(startDate);
             }
-            setNextPaymentDate(nextDue.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }));
-            setLastRentPeriod(new Date(lastBill.due_date).toLocaleDateString());
 
+            // Contract end check for edge cases
+            if (currentOccupancy.contract_end_date && lastBill) {
+                const endDate = new Date(currentOccupancy.contract_end_date);
+                if (nextDue! >= endDate) {
+                    const rentAmount = parseFloat(lastBill.rent_amount || 0);
+                    const advanceAmount = parseFloat(lastBill.advance_amount || 0);
+                    let monthsCoveredByPayment = 1;
+                    if (rentAmount > 0 && advanceAmount > 0) {
+                        monthsCoveredByPayment = 1 + Math.floor(advanceAmount / rentAmount);
+                    }
+                    const paidPeriodEnd = new Date(lastBill.due_date);
+                    paidPeriodEnd.setMonth(paidPeriodEnd.getMonth() + monthsCoveredByPayment);
+
+                    if (paidPeriodEnd >= endDate) {
+                        const today = new Date();
+                        const daysDiff = Math.floor((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                        if (daysDiff > 45) {
+                            // Contract end far away — probably sync issue, show calculated date
+                            setNextPaymentDate(nextDue!.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }));
+                            setLastRentPeriod(new Date(lastBill.due_date).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }));
+                            return;
+                        }
+                        setNextPaymentDate("All Paid - Contract Ending");
+                        setLastRentPeriod(new Date(lastBill.due_date).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }));
+                        return;
+                    }
+                }
+            }
+
+            // Fallback: use nextDue
+            setNextPaymentDate(nextDue!.toLocaleDateString('en-US', {
+                month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC'
+            }));
+            if (lastBill) {
+                setLastRentPeriod(new Date(lastBill.due_date).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }));
+            } else {
+                setLastRentPeriod("N/A");
+            }
         } else {
-            // No history -> Start Date
-            setNextPaymentDate(new Date(currentOccupancy.start_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }));
-            setLastRentPeriod("N/A");
+            // No start_date
+            if (lastBill && lastBill.due_date) {
+                const rentAmount = parseFloat(lastBill.rent_amount || 0);
+                const advanceAmount = parseFloat(lastBill.advance_amount || 0);
+                let monthsCovered = 1;
+                if (rentAmount > 0 && advanceAmount > 0) {
+                    monthsCovered = 1 + Math.floor(advanceAmount / rentAmount);
+                }
+
+                const d = new Date(lastBill.due_date);
+                const currentMonth = d.getMonth();
+                const currentYear = d.getFullYear();
+                const currentDay = d.getDate();
+
+                const targetMonth = currentMonth + monthsCovered;
+                const targetYear = currentYear + Math.floor(targetMonth / 12);
+                let finalMonth = targetMonth % 12;
+                if (finalMonth < 0) finalMonth += 12;
+
+                d.setFullYear(targetYear);
+                d.setMonth(finalMonth);
+                d.setDate(currentDay);
+
+                if (currentOccupancy?.contract_end_date) {
+                    const endDate = new Date(currentOccupancy.contract_end_date);
+                    const paidPeriodEnd = new Date(lastBill.due_date);
+                    paidPeriodEnd.setMonth(paidPeriodEnd.getMonth() + monthsCovered);
+                    if (paidPeriodEnd >= endDate) {
+                        setNextPaymentDate("All Paid - Contract Ending");
+                        return;
+                    }
+                }
+
+                setNextPaymentDate(d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }));
+            } else {
+                setNextPaymentDate("N/A");
+            }
         }
+    };
+
+    // --- FAMILY MEMBERS FUNCTIONS ---
+
+    const loadFamilyMembers = async () => {
+        if (!occupancy) return;
+        const occId = occupancy.is_family_member ? occupancy.parent_occupancy_id : occupancy.id;
+        if (!occId) return;
+
+        setLoadingFamily(true);
+        try {
+            const API_URL = process.env.EXPO_PUBLIC_API_URL;
+            if (API_URL) {
+                const res = await fetch(`${API_URL}api/family-members?occupancy_id=${occId}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.members) setFamilyMembers(data.members);
+                }
+            }
+        } catch (err) {
+            console.error('Failed to load family members:', err);
+        }
+        setLoadingFamily(false);
+    };
+
+    useEffect(() => {
+        if (occupancy) {
+            loadFamilyMembers();
+        }
+    }, [occupancy]);
+
+    const searchFamilyMember = async (query: string) => {
+        if (!query || query.trim().length < 2) {
+            setFamilySearchResults([]);
+            return;
+        }
+        setFamilySearching(true);
+        try {
+            const excludeIds = [session.user.id, ...familyMembers.map((m: any) => m.member_id)];
+            const API_URL = process.env.EXPO_PUBLIC_API_URL;
+            if (API_URL) {
+                const res = await fetch(`${API_URL}api/family-members`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'search', query: query.trim(), exclude_ids: excludeIds })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.results) setFamilySearchResults(data.results);
+                }
+            }
+        } catch (err) {
+            console.error('Family search error:', err);
+        }
+        setFamilySearching(false);
+    };
+
+    useEffect(() => {
+        if (!familySearchQuery.trim()) {
+            setFamilySearchResults([]);
+            return;
+        }
+        const timer = setTimeout(() => searchFamilyMember(familySearchQuery), 400);
+        return () => clearTimeout(timer);
+    }, [familySearchQuery]);
+
+    const addFamilyMember = async (memberId: string) => {
+        if (!occupancy || isFamilyMember) return;
+        setAddingMember(memberId);
+        try {
+            const API_URL = process.env.EXPO_PUBLIC_API_URL;
+            if (API_URL) {
+                const res = await fetch(`${API_URL}api/family-members`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'add',
+                        parent_occupancy_id: occupancy.id,
+                        member_id: memberId,
+                        mother_id: session.user.id
+                    })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.success) {
+                        Alert.alert('Success', 'Family member added successfully!');
+                        setFamilySearchQuery('');
+                        setFamilySearchResults([]);
+                        loadFamilyMembers();
+                    } else {
+                        Alert.alert('Error', data.error || 'Failed to add family member');
+                    }
+                } else {
+                    Alert.alert('Error', 'Failed to add family member. Server error.');
+                }
+            }
+        } catch (err) {
+            console.error('Add family member error:', err);
+            Alert.alert('Error', 'Failed to add family member');
+        }
+        setAddingMember(null);
+    };
+
+    const removeFamilyMember = async (familyMemberId: string) => {
+        if (!occupancy || isFamilyMember) return;
+        setRemovingMember(familyMemberId);
+        try {
+            const API_URL = process.env.EXPO_PUBLIC_API_URL;
+            if (API_URL) {
+                const res = await fetch(`${API_URL}api/family-members`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        family_member_id: familyMemberId,
+                        mother_id: session.user.id
+                    })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.success) {
+                        Alert.alert('Success', 'Family member removed');
+                        loadFamilyMembers();
+                    } else {
+                        Alert.alert('Error', data.error || 'Failed to remove family member');
+                    }
+                } else {
+                    Alert.alert('Error', 'Failed to remove family member. Server error.');
+                }
+            }
+        } catch (err) {
+            console.error('Remove family member error:', err);
+            Alert.alert('Error', 'Failed to remove family member');
+        }
+        setRemovingMember(null);
+        setConfirmRemoveMember(null);
     };
 
     // --- ACTIONS ---
 
     const requestContractRenewal = async () => {
+        if (isFamilyMember) return Alert.alert('Error', 'Only the primary tenant can renew the contract.');
         if (!renewalMeetingDate) return Alert.alert('Error', 'Select a date');
         const { error } = await supabase.from('tenant_occupancies').update({
             renewal_requested: true,
@@ -437,7 +852,9 @@ export default function TenantDashboard({ session, profile }: any) {
         }).eq('id', occupancy.id);
 
         if (!error) {
-            createNotification(occupancy.landlord_id, 'contract_renewal_request', `Renewal req: ${renewalMeetingDate}`, { actor: session.user.id });
+            // Create Notification
+            createNotification(occupancy.landlord_id, 'contract_renewal_request', `Tenant requested contract renewal. Proposed signing date: ${renewalMeetingDate}`, { actor: session.user.id, email: true, sms: true });
+
             Alert.alert('Sent', 'Renewal request sent.');
             setShowRenewalModal(false);
             loadOccupancyData();
@@ -445,6 +862,7 @@ export default function TenantDashboard({ session, profile }: any) {
     };
 
     const requestEndOccupancy = async () => {
+        if (isFamilyMember) return Alert.alert('Error', 'Only the primary tenant can end the contract.');
         if (!occupancy || !endRequestDate || !endRequestReason) return Alert.alert('Error', 'Fill all fields');
         setSubmittingEndRequest(true);
         try {
@@ -523,7 +941,7 @@ export default function TenantDashboard({ session, profile }: any) {
             const dismissedReviews = dismissedStr ? JSON.parse(dismissedStr) : [];
             const dismissedStrings = dismissedReviews.map((id: any) => String(id));
 
-            const unreviewed = ended?.find((o: any) => !reviewedIds.includes(o.id) && !dismissedStrings.includes(String(o.id)));
+            const unreviewed = ended?.find((o: any) => !reviewedIds.includes(o.id) && !dismissedStrings.includes(String(o.property_id)));
 
             if (unreviewed) {
                 setReviewTarget(unreviewed);
@@ -554,7 +972,7 @@ export default function TenantDashboard({ session, profile }: any) {
                 const dismissed = dismissedStr ? JSON.parse(dismissedStr) : [];
                 // Ensure array of strings
                 const dismissedStrings = dismissed.map((id: any) => String(id));
-                const targetId = String(reviewTarget.id);
+                const targetId = String(reviewTarget.property_id);
 
                 if (!dismissedStrings.includes(targetId)) {
                     const newDismissed = [...dismissedStrings, targetId];
@@ -685,19 +1103,21 @@ export default function TenantDashboard({ session, profile }: any) {
                                         </Text>
                                     </TouchableOpacity>
                                 </View>
-                                <View style={[styles.gridActions, { marginTop: 8 }]}>
-                                    {canRenew ? (
-                                        <TouchableOpacity style={[styles.gridBtn, styles.btnOutline]} onPress={() => setShowRenewalModal(true)}>
-                                            <Ionicons name="refresh" size={16} color="black" style={{ marginRight: 4 }} />
-                                            <Text style={styles.btnTextBlack}>Renew Contract</Text>
+                                {!isFamilyMember && (
+                                    <View style={[styles.gridActions, { marginTop: 8 }]}>
+                                        {canRenew ? (
+                                            <TouchableOpacity style={[styles.gridBtn, styles.btnOutline]} onPress={() => setShowRenewalModal(true)}>
+                                                <Ionicons name="refresh" size={16} color="black" style={{ marginRight: 4 }} />
+                                                <Text style={styles.btnTextBlack}>Renew Contract</Text>
+                                            </TouchableOpacity>
+                                        ) : (
+                                            <View style={[styles.gridBtn, styles.btnDisabled]}><Text style={styles.btnTextDisabled}>Renew Unavailable</Text></View>
+                                        )}
+                                        <TouchableOpacity style={[styles.gridBtn, styles.btnOutlineRed]} onPress={() => setEndRequestModalVisible(true)}>
+                                            <Text style={styles.btnTextRed}>End Contract</Text>
                                         </TouchableOpacity>
-                                    ) : (
-                                        <View style={[styles.gridBtn, styles.btnDisabled]}><Text style={styles.btnTextDisabled}>Renew Unavailable</Text></View>
-                                    )}
-                                    <TouchableOpacity style={[styles.gridBtn, styles.btnOutlineRed]} onPress={() => setEndRequestModalVisible(true)}>
-                                        <Text style={styles.btnTextRed}>End Contract</Text>
-                                    </TouchableOpacity>
-                                </View>
+                                    </View>
+                                )}
                                 {occupancy.property?.terms_conditions ? (
                                     <TouchableOpacity
                                         style={[styles.gridBtn, { marginTop: 8, backgroundColor: '#f3f4f6', borderWidth: 1, borderColor: '#e5e7eb', width: '100%' }]}
@@ -755,29 +1175,107 @@ export default function TenantDashboard({ session, profile }: any) {
                             )}
                         </View>
 
-                        {/* 3. Utility Reminders */}
+                        {/* Family Members Section */}
                         <View style={styles.infoCard}>
-                            <View style={styles.cardHeaderSmall}>
-                                <View style={[styles.iconCircle, { backgroundColor: '#fef3c7' }]}><Ionicons name="alarm-outline" size={16} color="#d97706" /></View>
-                                <Text style={styles.cardTitleSmall}>Utility Reminders</Text>
+                            <View style={[styles.rowBetween, { marginBottom: 12 }]}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                    <View style={[styles.iconCircle, { backgroundColor: '#f3f4f6' }]}>
+                                        <Ionicons name="people-outline" size={16} color="#374151" />
+                                    </View>
+                                    <View>
+                                        <Text style={styles.cardTitleSmall}>Family Members</Text>
+                                        <Text style={{ fontSize: 10, color: '#6b7280' }}>{familyMembers.length + 1}/5 members</Text>
+                                    </View>
+                                </View>
+                                {!isFamilyMember && familyMembers.length < 4 && (
+                                    <TouchableOpacity
+                                        onPress={() => setShowFamilyModal(true)}
+                                        style={{ backgroundColor: '#f3f4f6', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: '#e5e7eb' }}
+                                    >
+                                        <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#111827' }}>+ Add Member</Text>
+                                    </TouchableOpacity>
+                                )}
                             </View>
-                            <View style={styles.utilityItem}>
-                                <View style={[styles.utilIcon, { backgroundColor: '#fef3c7' }]}><Ionicons name="flash" size={14} color="#d97706" /></View>
-                                <View>
-                                    <Text style={styles.utilTitle}>Electricity Bill</Text>
-                                    <Text style={styles.utilSub}>Usually arrives 1st week of the month.</Text>
+
+                            {/* Primary Tenant (Mother) */}
+                            <View style={{ padding: 10, backgroundColor: '#f9fafb', borderRadius: 12, borderWidth: 1, borderColor: '#f3f4f6', marginBottom: 8, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                                <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#4b5563', alignItems: 'center', justifyContent: 'center' }}>
+                                    {isFamilyMember && occupancy?.tenant?.avatar_url ? (
+                                        <Image source={{ uri: occupancy.tenant.avatar_url }} style={{ width: 32, height: 32, borderRadius: 16 }} />
+                                    ) : !isFamilyMember && profile?.avatar_url ? (
+                                        <Image source={{ uri: profile.avatar_url }} style={{ width: 32, height: 32, borderRadius: 16 }} />
+                                    ) : (
+                                        <Text style={{ color: 'white', fontSize: 12, fontWeight: 'bold' }}>
+                                            {isFamilyMember ? `${occupancy?.tenant?.first_name?.[0] || ''}${occupancy?.tenant?.last_name?.[0] || ''}` : `${profile?.first_name?.[0] || ''}${profile?.last_name?.[0] || ''}`}
+                                        </Text>
+                                    )}
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#111827' }}>
+                                        {isFamilyMember ? `${occupancy?.tenant?.first_name || ''} ${occupancy?.tenant?.last_name || ''}`.trim() || 'Primary Tenant' : `${profile?.first_name} ${profile?.last_name}`}
+                                    </Text>
+                                    <Text style={{ fontSize: 10, color: '#6b7280', fontWeight: 'bold' }}>Primary Tenant</Text>
+                                </View>
+                                <View style={{ backgroundColor: '#e5e7eb', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 }}>
+                                    <Text style={{ fontSize: 9, fontWeight: 'bold', color: '#374151' }}>Owner</Text>
                                 </View>
                             </View>
-                            {occupancy.wifi_due_day && (
-                                <View style={[styles.utilityItem, { marginTop: 10 }]}>
-                                    <View style={[styles.utilIcon, { backgroundColor: '#dbeafe' }]}><Ionicons name="wifi" size={14} color="#2563eb" /></View>
-                                    <View>
-                                        <Text style={styles.utilTitle}>Internet Bill</Text>
-                                        <Text style={styles.utilSub}>Due on the {occupancy.wifi_due_day}th of the month.</Text>
-                                    </View>
+
+                            {/* Members List */}
+                            {loadingFamily ? (
+                                <ActivityIndicator size="small" color="#6366f1" style={{ marginVertical: 10 }} />
+                            ) : familyMembers.length > 0 ? (
+                                <View style={{ gap: 6 }}>
+                                    {familyMembers.map((fm) => (
+                                        <View key={fm.id} style={{ padding: 10, backgroundColor: '#f9fafb', borderRadius: 12, borderWidth: 1, borderColor: '#f3f4f6', flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                                            <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#e5e7eb', alignItems: 'center', justifyContent: 'center' }}>
+                                                {fm.member_profile?.avatar_url ? (
+                                                    <Image source={{ uri: fm.member_profile.avatar_url }} style={{ width: 32, height: 32, borderRadius: 16 }} />
+                                                ) : (
+                                                    <Text style={{ color: '#374151', fontSize: 10, fontWeight: 'bold' }}>
+                                                        {`${fm.member_profile?.first_name?.[0] || ''}${fm.member_profile?.last_name?.[0] || ''}`}
+                                                    </Text>
+                                                )}
+                                            </View>
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#111827' }} numberOfLines={1}>
+                                                    {fm.member_profile?.first_name} {fm.member_profile?.last_name}
+                                                </Text>
+                                                <Text style={{ fontSize: 10, color: '#9ca3af' }} numberOfLines={1}>{fm.member_profile?.email}</Text>
+                                            </View>
+                                            {!isFamilyMember && (
+                                                confirmRemoveMember === fm.id ? (
+                                                    <View style={{ flexDirection: 'row', gap: 4 }}>
+                                                        <TouchableOpacity onPress={() => removeFamilyMember(fm.id)} disabled={removingMember === fm.id} style={{ backgroundColor: '#fef2f2', borderColor: '#fecaca', borderWidth: 1, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+                                                            <Text style={{ fontSize: 9, fontWeight: 'bold', color: '#ef4444' }}>Yes</Text>
+                                                        </TouchableOpacity>
+                                                        <TouchableOpacity onPress={() => setConfirmRemoveMember(null)} style={{ backgroundColor: '#f3f4f6', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+                                                            <Text style={{ fontSize: 9, fontWeight: 'bold', color: '#6b7280' }}>No</Text>
+                                                        </TouchableOpacity>
+                                                    </View>
+                                                ) : (
+                                                    <TouchableOpacity onPress={() => setConfirmRemoveMember(fm.id)} style={{ padding: 4 }}>
+                                                        <Ionicons name="trash-outline" size={16} color="#ef4444" />
+                                                    </TouchableOpacity>
+                                                )
+                                            )}
+                                        </View>
+                                    ))}
+                                </View>
+                            ) : (
+                                <View style={{ alignItems: 'center', paddingVertical: 10 }}>
+                                    <Text style={{ fontSize: 11, color: '#9ca3af' }}>No family members added yet.</Text>
+                                </View>
+                            )}
+
+                            {isFamilyMember && (
+                                <View style={{ marginTop: 12, padding: 10, backgroundColor: '#fffbeb', borderRadius: 12, borderWidth: 1, borderColor: '#fde68a', flexDirection: 'row', alignItems: 'flex-start', gap: 6 }}>
+                                    <Ionicons name="information-circle-outline" size={16} color="#b45309" />
+                                    <Text style={{ fontSize: 10, color: '#b45309', fontWeight: 'bold', flex: 1 }}>You are a family member. Only the primary tenant can manage family members.</Text>
                                 </View>
                             )}
                         </View>
+
 
                         {/* 4. Pending Payments */}
                         <View style={styles.infoCard}>
@@ -860,7 +1358,7 @@ export default function TenantDashboard({ session, profile }: any) {
                                             <Text style={{ fontSize: 10, color: '#ea580c', fontWeight: 'bold' }}>Contract ends in {daysUntilContractEnd} days</Text>
                                         </View>
                                     )}
-                                    {canRenew && (
+                                    {!isFamilyMember && canRenew && (
                                         <TouchableOpacity onPress={() => setShowRenewalModal(true)} style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
                                             <Ionicons name="refresh" size={12} color="#4338ca" />
                                             <Text style={{ fontSize: 10, color: '#4338ca', fontWeight: 'bold' }}>Renew Contract Available</Text>
@@ -873,9 +1371,13 @@ export default function TenantDashboard({ session, profile }: any) {
                                         <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' }}>
                                             <Ionicons name="time-outline" size={12} color="#64748b" />
                                         </View>
-                                        <Text style={styles.ovDateGray}>{lastRentPeriod}</Text>
+                                        <Text style={styles.ovDateGray}>
+                                            {lastPayment ? new Date(lastPayment.due_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : 'N/A'}
+                                        </Text>
                                     </View>
-                                    <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>Total Paid: ₱{totalRentPaid.toLocaleString()}</Text>
+                                    <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                                        Total Paid: ₱{lastPayment ? Number(lastPayment.amount_paid || (parseFloat(lastPayment.rent_amount || 0) + parseFloat(lastPayment.security_deposit_amount || 0) + parseFloat(lastPayment.advance_amount || 0) + parseFloat(lastPayment.water_bill || 0) + parseFloat(lastPayment.electrical_bill || 0) + parseFloat(lastPayment.wifi_bill || 0) + parseFloat(lastPayment.other_bills || 0))).toLocaleString() : '0'}
+                                    </Text>
                                 </View>
                             </View>
 
@@ -883,25 +1385,44 @@ export default function TenantDashboard({ session, profile }: any) {
                             <View style={styles.historySection}>
                                 <Text style={[styles.cardTitleSmall, { marginBottom: 10 }]}>Rent Payment History ({new Date().getFullYear()})</Text>
                                 <View style={styles.historyGrid}>
-                                    {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((m, i) => {
-                                        const isPaid = paymentHistory.some(p => {
+                                    {(() => {
+                                        // Build a Set of all paid month indices for current year
+                                        // This accounts for advance payments covering extra months
+                                        const paidMonths = new Set<number>();
+                                        const currentYear = new Date().getFullYear();
+                                        paymentHistory.forEach(p => {
                                             const d = new Date(p.due_date);
-                                            return d.getMonth() === i && d.getFullYear() === new Date().getFullYear();
+                                            if (d.getFullYear() !== currentYear) return;
+                                            const billMonth = d.getMonth();
+                                            paidMonths.add(billMonth);
+                                            // If bill has advance_amount, mark additional month(s) as covered
+                                            const rent = parseFloat(p.rent_amount || 0);
+                                            const advance = parseFloat(p.advance_amount || 0);
+                                            if (rent > 0 && advance > 0) {
+                                                const extraMonths = Math.floor(advance / rent);
+                                                for (let m = 1; m <= extraMonths; m++) {
+                                                    const coveredMonth = billMonth + m;
+                                                    if (coveredMonth < 12) paidMonths.add(coveredMonth);
+                                                }
+                                            }
                                         });
-                                        const isCurrent = new Date().getMonth() === i;
-                                        return (
-                                            <View key={m} style={styles.monthCol}>
-                                                <Text style={[styles.monthText, isPaid ? { color: 'black' } : { color: '#d1d5db' }]}>{m}</Text>
-                                                {isPaid ? (
-                                                    <View style={styles.dotPaid}><Ionicons name="checkmark" size={10} color="black" /></View>
-                                                ) : isCurrent ? (
-                                                    <View style={styles.dotCurrent} />
-                                                ) : (
-                                                    <View style={styles.dotEmpty} />
-                                                )}
-                                            </View>
-                                        )
-                                    })}
+                                        return <>{['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((m, i) => {
+                                            const isPaid = paidMonths.has(i);
+                                            const isCurrent = new Date().getMonth() === i;
+                                            return (
+                                                <View key={m} style={styles.monthCol}>
+                                                    <Text style={[styles.monthText, isPaid ? { color: 'black' } : { color: '#d1d5db' }]}>{m}</Text>
+                                                    {isPaid ? (
+                                                        <View style={styles.dotPaid}><Ionicons name="checkmark" size={10} color="black" /></View>
+                                                    ) : isCurrent ? (
+                                                        <View style={styles.dotCurrent} />
+                                                    ) : (
+                                                        <View style={styles.dotEmpty} />
+                                                    )}
+                                                </View>
+                                            )
+                                        })}</>;
+                                    })()}
                                 </View>
                             </View>
                         </View>
@@ -990,6 +1511,107 @@ export default function TenantDashboard({ session, profile }: any) {
                             <TouchableOpacity style={[styles.confirmBtn, { backgroundColor: '#4338ca' }]} onPress={requestContractRenewal}>
                                 <Text style={styles.confirmBtnText}>Submit</Text>
                             </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Add Family Member Modal */}
+            <Modal visible={showFamilyModal} transparent animationType="slide">
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.modalContent, { padding: 0, overflow: 'hidden' }]}>
+                        {/* Header */}
+                        <View style={{ backgroundColor: '#111827', padding: 20, paddingTop: 30, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                                <View style={{ width: 44, height: 44, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' }}>
+                                    <Ionicons name="person-add-outline" size={24} color="white" />
+                                </View>
+                                <View>
+                                    <Text style={{ color: 'white', fontWeight: '900', fontSize: 20 }}>Add Family</Text>
+                                    <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 12, fontWeight: 'bold' }}>{familyMembers.length}/4 slots used</Text>
+                                </View>
+                            </View>
+                            <TouchableOpacity onPress={() => { setShowFamilyModal(false); setFamilySearchQuery(''); setFamilySearchResults([]); }} style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' }}>
+                                <Ionicons name="close" size={20} color="white" />
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Body */}
+                        <View style={{ padding: 20, backgroundColor: 'white' }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#f9fafb', borderRadius: 12, borderWidth: 1, borderColor: '#e5e7eb', paddingHorizontal: 12, marginBottom: 16 }}>
+                                <Ionicons name="search-outline" size={20} color="#9ca3af" />
+                                <TextInput
+                                    style={{ flex: 1, padding: 12, fontSize: 14, color: '#111827' }}
+                                    placeholder="Search by name, email or phone..."
+                                    placeholderTextColor="#9ca3af"
+                                    value={familySearchQuery}
+                                    onChangeText={setFamilySearchQuery}
+                                />
+                                {familySearchQuery.length > 0 && (
+                                    <TouchableOpacity onPress={() => setFamilySearchQuery('')} style={{ padding: 4 }}>
+                                        <Ionicons name="close-circle" size={16} color="#d1d5db" />
+                                    </TouchableOpacity>
+                                )}
+                            </View>
+
+                            <ScrollView style={{ maxHeight: 300 }} nestedScrollEnabled>
+                                {familySearching ? (
+                                    <View style={{ alignItems: 'center', paddingVertical: 20 }}>
+                                        <ActivityIndicator size="small" color="#6366f1" />
+                                        <Text style={{ color: '#6b7280', fontSize: 12, marginTop: 10 }}>Searching users...</Text>
+                                    </View>
+                                ) : familySearchResults.length > 0 ? (
+                                    <View style={{ gap: 8 }}>
+                                        {familySearchResults.map((user) => (
+                                            <View key={user.id} style={{ flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#f3f4f6', backgroundColor: '#fff' }}>
+                                                <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                                                    {user.avatar_url ? (
+                                                        <Image source={{ uri: user.avatar_url }} style={{ width: 40, height: 40, borderRadius: 20 }} />
+                                                    ) : (
+                                                        <Text style={{ color: '#4b5563', fontSize: 14, fontWeight: 'bold' }}>
+                                                            {`${user.first_name?.[0] || ''}${user.last_name?.[0] || ''}`}
+                                                        </Text>
+                                                    )}
+                                                </View>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#111827' }}>
+                                                        {user.first_name} {user.last_name}
+                                                    </Text>
+                                                    <Text style={{ fontSize: 11, color: '#6b7280' }}>{user.email}</Text>
+                                                </View>
+                                                <TouchableOpacity
+                                                    onPress={() => addFamilyMember(user.id)}
+                                                    disabled={addingMember === user.id}
+                                                    style={{ backgroundColor: '#111827', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 }}
+                                                >
+                                                    {addingMember === user.id ? (
+                                                        <ActivityIndicator size="small" color="white" />
+                                                    ) : (
+                                                        <Text style={{ color: 'white', fontSize: 12, fontWeight: 'bold' }}>Add</Text>
+                                                    )}
+                                                </TouchableOpacity>
+                                            </View>
+                                        ))}
+                                    </View>
+                                ) : familySearchQuery.length >= 2 ? (
+                                    <View style={{ alignItems: 'center', paddingVertical: 30, backgroundColor: '#f9fafb', borderRadius: 16, borderWidth: 1, borderColor: '#f3f4f6' }}>
+                                        <Ionicons name="search" size={32} color="#d1d5db" style={{ marginBottom: 10 }} />
+                                        <Text style={{ color: '#4b5563', fontSize: 14, fontWeight: 'bold' }}>No users found</Text>
+                                        <Text style={{ color: '#9ca3af', fontSize: 12, textAlign: 'center', marginTop: 4, paddingHorizontal: 20 }}>
+                                            Try searching with a different name, email, or exact phone number.
+                                        </Text>
+                                    </View>
+                                ) : (
+                                    <View style={{ alignItems: 'center', paddingVertical: 40 }}>
+                                        <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: '#f9fafb', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
+                                            <Ionicons name="people-outline" size={32} color="#d1d5db" />
+                                        </View>
+                                        <Text style={{ color: '#6b7280', fontSize: 13, textAlign: 'center', paddingHorizontal: 30, lineHeight: 20 }}>
+                                            Search for a registered user to add them as a family member. They will be able to see your property and payments.
+                                        </Text>
+                                    </View>
+                                )}
+                            </ScrollView>
                         </View>
                     </View>
                 </View>

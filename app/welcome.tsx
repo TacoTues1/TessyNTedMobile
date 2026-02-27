@@ -62,11 +62,11 @@ export default function WelcomeScreen() {
                         }
                     ]}
                 >
-                    <View style={styles.logoCircle}>
+                    <View>
                         {/* Using icon.png for the original full-color logo */}
                         <Image source={require('../assets/images/icon.png')} style={styles.logoIcon} resizeMode="contain" />
                     </View>
-                    <Text style={styles.systemName}>TessyNTed</Text>
+                    <Text style={styles.systemName}>Abalay</Text>
                 </Animated.View>
             </ImageBackground>
 
@@ -77,11 +77,6 @@ export default function WelcomeScreen() {
                     { transform: [{ translateY: cardTranslate }] }
                 ]}
             >
-                {/* Decorative Pill/Handle */}
-                {/* <View style={styles.handleContainer}>
-                    <View style={styles.handle} />
-                    <View style={[styles.handle, { backgroundColor: '#ea580c', width: 20, marginLeft: 4 }]} />
-                </View> */}
 
                 <Text style={styles.title}>
                     A <Text style={styles.highlight}>Rental</Text> Management Platform
@@ -95,7 +90,7 @@ export default function WelcomeScreen() {
 
                 <TouchableOpacity
                     style={styles.primaryButton}
-                    onPress={() => router.replace('/login')}
+                    onPress={() => router.replace('/login?initialView=register')}
                     activeOpacity={0.8}
                 >
                     <Text style={styles.primaryButtonText}>Get Started</Text>
@@ -133,17 +128,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 15,
     },
-    logoCircle: {
-        width: 120,
-        height: 120,
-        borderRadius: 25,
-        backgroundColor: 'rgba(255,255,255,0.2)',
-        backdropFilter: 'blur(10px)', // Works on some platforms, irrelevant for RN without proper support but adds intent
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.3)',
-    },
+
     logoIcon: {
         width: 100,
         height: 100,
@@ -156,6 +141,7 @@ const styles = StyleSheet.create({
         textShadowColor: 'rgba(0, 0, 0, 0.5)',
         textShadowOffset: { width: 0, height: 2 },
         textShadowRadius: 10,
+        fontFamily: 'Pacifico_400Regular'
     },
     bottomCard: {
         position: 'absolute',

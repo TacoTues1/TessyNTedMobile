@@ -100,11 +100,47 @@ export default function MaintenanceScreen() {
     try {
       let query = supabase
         .from('maintenance_requests')
-        .select('*, properties(title, landlord)')
+        .select('*, properties(title, landlord), tenant_profile:profiles!maintenance_requests_tenant_fkey(first_name, last_name)')
         .order('created_at', { ascending: false });
 
       if (prof.role === 'tenant') {
-        query = query.eq('tenant', sess.user.id);
+        let tenantIds = [sess.user.id];
+
+        // Find if this tenant has an active occupancy
+        const { data: myOcc } = await supabase
+          .from('tenant_occupancies')
+          .select('id')
+          .eq('tenant_id', sess.user.id)
+          .eq('status', 'active')
+          .maybeSingle();
+
+        if (myOcc) {
+          // This is the primary tenant. Get family members.
+          const { data: fms } = await supabase
+            .from('family_members')
+            .select('member_id')
+            .eq('parent_occupancy_id', myOcc.id);
+          if (fms) {
+            tenantIds = [...tenantIds, ...fms.map(f => f.member_id)];
+          }
+        } else {
+          // Check if family member via API to load their own requests
+          try {
+            const API_URL = process.env.EXPO_PUBLIC_API_URL || '';
+            const urlPrefix = API_URL.endsWith('/') ? API_URL.slice(0, -1) : API_URL;
+            if (urlPrefix) {
+              const res = await fetch(`${urlPrefix}/api/family-members?member_id=${sess.user.id}`);
+              if (res.ok) {
+                const fmData = await res.json();
+                if (fmData && fmData.occupancy) {
+                  tenantIds = [sess.user.id]; // Family member only sees their own requests right now
+                }
+              }
+            }
+          } catch (err) { }
+        }
+
+        query = query.in('tenant', tenantIds);
       } else if (prof.role === 'landlord') {
         const { data: myProps } = await supabase.from('properties').select('id').eq('landlord', sess.user.id);
         if (myProps && myProps.length > 0) {
@@ -116,8 +152,37 @@ export default function MaintenanceScreen() {
       }
 
       const { data, error } = await query;
-      if (error) console.log('Load requests error:', error);
-      setRequests(data || []);
+      if (error) {
+        console.log('Load requests error:', error);
+      } else if (data && data.length > 0) {
+        // Resolve family members via API lookup to show tags
+        const tenantIdsInRequests = [...new Set(data.map(r => r.tenant))];
+        let fmMap = {};
+        try {
+          const API_URL = process.env.EXPO_PUBLIC_API_URL || '';
+          const urlPrefix = API_URL.endsWith('/') ? API_URL.slice(0, -1) : API_URL;
+          if (urlPrefix) {
+            const res = await fetch(`${urlPrefix}/api/family-members`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'lookup_members', member_ids: tenantIdsInRequests })
+            });
+            if (res.ok) {
+              const fData = await res.json();
+              fmMap = fData.membersMap || {};
+            }
+          }
+        } catch (err) { }
+
+        const enrichedRequests = data.map((req: any) => ({
+          ...req,
+          is_family_member: !!(fmMap as any)[req.tenant],
+          primary_tenant_name: (fmMap as any)[req.tenant] ? `${(fmMap as any)[req.tenant].first_name} ${(fmMap as any)[req.tenant].last_name}` : null
+        }));
+        setRequests(enrichedRequests);
+      } else {
+        setRequests([]);
+      }
     } catch (e) {
       console.log('Load requests exception:', e);
     }
@@ -133,13 +198,32 @@ export default function MaintenanceScreen() {
           .eq('status', 'active')
           .maybeSingle();
 
+        let prop = null;
         if (occupancy && occupancy.property) {
-          const prop = Array.isArray(occupancy.property) ? occupancy.property[0] : occupancy.property;
-          if (prop) {
-            setOccupiedProperty(prop);
-            setProperties([prop]);
-            setFormData(prev => ({ ...prev, property_id: prop.id }));
+          prop = Array.isArray(occupancy.property) ? occupancy.property[0] : occupancy.property;
+        } else {
+          // Check if user is family member
+          try {
+            const API_URL = process.env.EXPO_PUBLIC_API_URL || '';
+            const urlPrefix = API_URL.endsWith('/') ? API_URL.slice(0, -1) : API_URL;
+            if (urlPrefix) {
+              const res = await fetch(`${urlPrefix}/api/family-members?member_id=${sess.user.id}`);
+              if (res.ok) {
+                const fmData = await res.json();
+                if (fmData && fmData.occupancy && fmData.occupancy.property) {
+                  prop = fmData.occupancy.property;
+                }
+              }
+            }
+          } catch (err) {
+            console.error("Failed to load family member property", err);
           }
+        }
+
+        if (prop) {
+          setOccupiedProperty(prop);
+          setProperties([prop]);
+          setFormData(prev => ({ ...prev, property_id: prop.id }));
         } else {
           // Fallback: check accepted applications
           const { data: acceptedApps } = await supabase
@@ -587,10 +671,23 @@ export default function MaintenanceScreen() {
               <Text style={styles.metaText}>{item.properties?.title}</Text>
             </View>
             {profile?.role === 'landlord' && item.tenant_profile && (
-              <View style={styles.metaItem}>
+              <View style={[styles.metaItem, { flexWrap: 'wrap', maxWidth: '80%' }]}>
                 <Ionicons name="person-outline" size={14} color="#9ca3af" />
-                <Text style={styles.metaText}>
+                <Text style={styles.metaText} numberOfLines={2}>
                   {item.tenant_profile.first_name} {item.tenant_profile.last_name}
+                </Text>
+                {item.is_family_member && (
+                  <View style={{ backgroundColor: '#f3e8ff', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginLeft: 4, marginTop: 2 }}>
+                    <Text style={{ fontSize: 9, color: '#7e22ce', fontWeight: 'bold' }}>FAMILY OF {item.primary_tenant_name?.toUpperCase()}</Text>
+                  </View>
+                )}
+              </View>
+            )}
+            {profile?.role === 'tenant' && session?.user?.id !== item.tenant && item.tenant_profile && (
+              <View style={[styles.metaItem, { flexWrap: 'wrap', maxWidth: '80%' }]}>
+                <Ionicons name="people-outline" size={14} color="#3b82f6" />
+                <Text style={[styles.metaText, { color: '#3b82f6' }]} numberOfLines={1}>
+                  By {item.tenant_profile.first_name} (Family)
                 </Text>
               </View>
             )}

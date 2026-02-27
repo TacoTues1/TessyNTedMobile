@@ -18,6 +18,7 @@ import {
 import { LineChart } from 'react-native-chart-kit';
 import CalendarPicker from '../../../components/ui/CalendarPicker';
 import { useRealtime } from '../../../hooks/useRealtime';
+import { runDailyAutomatedTasks } from '../../../lib/automatedTasks';
 import { createNotification } from '../../../lib/notifications';
 import { supabase } from '../../../lib/supabase';
 
@@ -137,6 +138,9 @@ export default function LandlordDashboard({ session, profile }: any) {
 
     const loadDashboard = async () => {
         setRefreshing(true);
+        if (session?.user?.id) {
+            await runDailyAutomatedTasks(session.user.id);
+        }
         await Promise.all([
             loadProperties(),
             loadOccupancies(),
@@ -615,8 +619,8 @@ export default function LandlordDashboard({ session, profile }: any) {
         }
 
         await supabase.from('tenant_occupancies').update(updateData).eq('id', occupancy.id);
-        const message = approved ? `Renewal approved. Bill sent.` : `Renewal rejected.`;
-        await createNotification(occupancy.tenant_id, approved ? 'contract_renewal_approved' : 'contract_renewal_rejected', message, { actor: session.user.id });
+        const message = approved ? `Your contract renewal for "${occupancy.property?.title}" was approved! A new bill has been sent.` : `Your contract renewal request for "${occupancy.property?.title}" was declined.`;
+        await createNotification(occupancy.tenant_id, approved ? 'contract_renewal_approved' : 'contract_renewal_rejected', message, { actor: session.user.id, email: true, sms: true });
 
         Alert.alert('Success', approved ? 'Renewed & Bill Sent' : 'Rejected');
         setRenewalModal({ isOpen: false, occupancy: null, action: null });
@@ -672,19 +676,22 @@ export default function LandlordDashboard({ session, profile }: any) {
             {/* --- HERO HEADER BOX --- */}
             <View style={styles.headerBox}>
                 <View style={styles.headerTextSection}>
-                    <Text style={styles.welcomeText}>Welcome</Text>
+                    <Text style={styles.welcomeText}>Welcome back,</Text>
                     <Text style={styles.nameText}>{profile?.first_name || 'Landlord'} {profile?.last_name || ''}</Text>
                     <View style={styles.roleBadge}>
                         <Ionicons name="shield-checkmark" size={12} color="#059669" />
                         <Text style={styles.roleText}>{profile?.role === 'landlord' ? 'Landlord' : 'User'}</Text>
                     </View>
                 </View>
-                <TouchableOpacity onPress={() => router.push('/properties/new' as any)} style={styles.addPropertyBtn}>
-                    <View style={styles.addPropertyIcon}>
-                        <Ionicons name="add" size={24} color="white" />
-                    </View>
-                    <Text style={styles.addPropertyLabel}>Add Property</Text>
-                </TouchableOpacity>
+                <View style={styles.headerAvatarContainer}>
+                    {profile?.avatar_url ? (
+                        <Image source={{ uri: profile.avatar_url }} style={styles.headerAvatarImage} />
+                    ) : (
+                        <Text style={styles.headerAvatarText}>
+                            {(profile?.first_name?.[0] || 'L').toUpperCase()}
+                        </Text>
+                    )}
+                </View>
             </View>
 
             {/* --- MESSAGE TENANTS BUTTON --- */}
@@ -777,7 +784,7 @@ export default function LandlordDashboard({ session, profile }: any) {
                         </TouchableOpacity>
                     ))}
                 </View>
-            </View>           
+            </View>
 
             {/* --- BILLING SCHEDULE --- */}
             <View style={styles.sectionContainer}>
@@ -1179,18 +1186,19 @@ const styles = StyleSheet.create({
         marginTop: 8,
     },
     roleText: { color: '#34d399', fontSize: 11, fontWeight: '700' },
-    addPropertyBtn: { alignItems: 'center', gap: 6 },
-    addPropertyIcon: {
-        width: 48,
-        height: 48,
-        borderRadius: 16,
-        backgroundColor: 'rgba(255,255,255,0.15)',
+    headerAvatarContainer: {
+        width: 50,
+        height: 50,
+        borderRadius: 25,
+        backgroundColor: '#4f46e5',
         alignItems: 'center',
         justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.25)',
+        borderWidth: 2,
+        borderColor: 'rgba(255,255,255,0.2)',
+        overflow: 'hidden',
     },
-    addPropertyLabel: { color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '600' },
+    headerAvatarText: { color: 'white', fontSize: 24, fontWeight: 'bold' },
+    headerAvatarImage: { width: '100%', height: '100%', borderRadius: 25 },
 
     // Message Tenants Button
     messageTenantsBtnFull: {

@@ -36,6 +36,13 @@ export default function AssignTenantScreen() {
     const [lateFee, setLateFee] = useState('');
     const [wifiDueDay, setWifiDueDay] = useState('');
     const [contractPdf, setContractPdf] = useState<any>(null);
+    const [step, setStep] = useState(0);
+    const STEPS = [
+        { label: 'Tenant', icon: '1' },
+        { label: 'Contract', icon: '2' },
+        { label: 'Documents', icon: '3' },
+        { label: 'Utilities', icon: '4' },
+    ];
 
     useEffect(() => {
         loadData();
@@ -205,7 +212,7 @@ export default function AssignTenantScreen() {
             // 4. Notify tenant (non-blocking - don't let notification failure block assignment)
             try {
                 const message = `You have been assigned to "${property.title}" from ${startDate}. Move-in bill sent.`;
-                await createNotification(selectedTenant.tenant, 'occupancy_assigned', message, { actor: session.user.id });
+                await createNotification(selectedTenant.tenant, 'occupancy_assigned', message, { actor: session.user.id, email: true, sms: true });
             } catch (notifErr) {
                 console.log('Notification failed (non-critical):', notifErr);
             }
@@ -239,211 +246,262 @@ export default function AssignTenantScreen() {
         );
     }
 
+    const nextStep = () => {
+        if (step === 0 && !selectedTenant) return Alert.alert('Error', 'Please select a tenant');
+        if (step === 1) {
+            if (!startDate) return Alert.alert('Error', 'Please enter a start date');
+            const months = parseInt(contractMonths);
+            if (isNaN(months) || months < 3) return Alert.alert('Error', 'Contract must be at least 3 months');
+        }
+        if (step === 2) {
+            if (!lateFee) return Alert.alert('Error', 'Please enter late payment fee');
+        }
+        setStep(s => Math.min(s + 1, STEPS.length - 1));
+    };
+
+    const prevStep = () => {
+        setStep(s => Math.max(s - 1, 0));
+    };
+
+    const renderStepContent = () => {
+        switch (step) {
+            case 0:
+                return (
+                    <View style={styles.stepContainer}>
+                        {approvedBookings.length === 0 ? (
+                            <View style={styles.emptyTenants}>
+                                <Ionicons name="alert-circle-outline" size={24} color="#f59e0b" />
+                                <Text style={styles.emptyTenantsText}>No approved bookings found.</Text>
+                            </View>
+                        ) : (
+                            approvedBookings.map((item) => {
+                                const isSelected = selectedTenant?.id === item.id;
+                                const name = `${item.tenant_profile?.first_name || ''} ${item.tenant_profile?.last_name || ''}`.trim();
+                                return (
+                                    <TouchableOpacity
+                                        key={item.id}
+                                        style={[styles.tenantCard, isSelected && styles.tenantCardSelected]}
+                                        onPress={() => setSelectedTenant(item)}
+                                        activeOpacity={0.8}
+                                    >
+                                        <View style={[styles.tenantAvatar, isSelected && { backgroundColor: '#111' }]}>
+                                            <Text style={[styles.tenantAvatarText, isSelected && { color: 'white' }]}>
+                                                {(item.tenant_profile?.first_name || '?')[0].toUpperCase()}
+                                            </Text>
+                                        </View>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={[styles.tenantName, isSelected && { color: 'white' }]}>{name || 'Unknown'}</Text>
+                                            <Text style={[styles.tenantPhone, isSelected && { color: 'rgba(255,255,255,0.7)' }]}>
+                                                {item.tenant_profile?.phone || 'No phone'}
+                                            </Text>
+                                        </View>
+                                        <View style={[styles.radioOuter, isSelected && styles.radioOuterSelected]}>
+                                            {isSelected && <View style={styles.radioInner} />}
+                                        </View>
+                                    </TouchableOpacity>
+                                );
+                            })
+                        )}
+                    </View>
+                );
+            case 1:
+                return (
+                    <View style={styles.stepContainer}>
+                        <Text style={styles.label}>Start Date *</Text>
+                        <TextInput
+                            style={styles.input}
+                            value={startDate}
+                            onChangeText={setStartDate}
+                            placeholder="YYYY-MM-DD"
+                            placeholderTextColor="#c4c4c4"
+                        />
+
+                        <Text style={styles.label}>Contract Duration (Months) *</Text>
+                        <TextInput
+                            style={styles.input}
+                            value={contractMonths}
+                            onChangeText={setContractMonths}
+                            keyboardType="numeric"
+                            placeholder="12"
+                            placeholderTextColor="#c4c4c4"
+                        />
+                        <Text style={styles.hint}>Minimum 3 months.</Text>
+
+                        <Text style={styles.label}>End Date (Auto-calculated)</Text>
+                        <View style={styles.readonlyInput}>
+                            <Text style={styles.readonlyText}>{endDate ? formatDate(endDate) : '—'}</Text>
+                        </View>
+                        <Text style={styles.hint}>Automatically calculated.</Text>
+
+                        <View style={styles.summaryCard}>
+                            <Text style={styles.summaryTitle}>Move-in Summary</Text>
+                            <View style={styles.summaryRow}>
+                                <Text style={styles.summaryLabel}>Rent:</Text>
+                                <Text style={styles.summaryValue}>₱{rentAmount.toLocaleString()}</Text>
+                            </View>
+                            <View style={styles.summaryRow}>
+                                <Text style={styles.summaryLabel}>Advance:</Text>
+                                <Text style={styles.summaryValue}>₱{advanceAmount.toLocaleString()}</Text>
+                            </View>
+                            <View style={styles.summaryRow}>
+                                <Text style={styles.summaryLabel}>Deposit:</Text>
+                                <Text style={styles.summaryValue}>₱{securityDeposit.toLocaleString()}</Text>
+                            </View>
+                            <View style={styles.summaryDivider} />
+                            <View style={styles.summaryRow}>
+                                <Text style={styles.summaryTotalLabel}>Total:</Text>
+                                <Text style={styles.summaryTotalValue}>₱{totalMoveIn.toLocaleString()}</Text>
+                            </View>
+                        </View>
+                    </View>
+                );
+            case 2:
+                return (
+                    <View style={styles.stepContainer}>
+                        <Text style={styles.label}>Contract PDF (optional)</Text>
+                        <TouchableOpacity style={styles.uploadBtn} onPress={pickContractPdf} activeOpacity={0.8}>
+                            <Ionicons name={contractPdf ? "document-attach" : "cloud-upload-outline"} size={22} color={contractPdf ? "#10b981" : "#9ca3af"} />
+                            <Text style={[styles.uploadBtnText, contractPdf && { color: '#10b981' }]}>
+                                {contractPdf ? contractPdf.name : 'Click to upload contract PDF'}
+                            </Text>
+                        </TouchableOpacity>
+
+                        <Text style={styles.label}>Late Payment Fee (₱) *</Text>
+                        <TextInput
+                            style={styles.input}
+                            value={lateFee}
+                            onChangeText={setLateFee}
+                            keyboardType="numeric"
+                            placeholder="e.g. 500"
+                            placeholderTextColor="#c4c4c4"
+                        />
+                        <Text style={styles.hint}>Amount charged when rent is paid late.</Text>
+                    </View>
+                );
+            case 3:
+                return (
+                    <View style={styles.stepContainer}>
+                        <View style={styles.infoBox}>
+                            <Ionicons name="information-circle" size={16} color="#6366f1" />
+                            <Text style={styles.infoText}>
+                                Utilities: Tenants receive reminders 3 days before due dates.
+                            </Text>
+                        </View>
+
+                        <Text style={styles.label}>Wifi Due Day *</Text>
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-start', marginTop: 5 }}>
+                            {Array.from({ length: 31 }, (_, i) => i + 1).map(day => (
+                                <TouchableOpacity
+                                    key={day}
+                                    onPress={() => setWifiDueDay(day.toString())}
+                                    style={{
+                                        width: 36, height: 36, borderRadius: 18,
+                                        backgroundColor: wifiDueDay === day.toString() ? 'black' : 'white',
+                                        alignItems: 'center', justifyContent: 'center',
+                                        borderWidth: 1, borderColor: wifiDueDay === day.toString() ? 'black' : '#e5e7eb'
+                                    }}
+                                >
+                                    <Text style={{ fontSize: 12, fontWeight: 'bold', color: wifiDueDay === day.toString() ? 'white' : '#374151' }}>{day}</Text>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+
+                        <View style={[styles.infoBox, { backgroundColor: '#fef3c7', marginTop: 15 }]}>
+                            <Ionicons name="flash" size={16} color="#d97706" />
+                            <Text style={[styles.infoText, { color: '#92400e' }]}>
+                                Note: Electricity and Water reminders are sent automatically (due date is always 1st week of the month).
+                            </Text>
+                        </View>
+                    </View>
+                );
+            default:
+                return null;
+        }
+    };
+
     return (
         <SafeAreaView style={styles.container} edges={['top']}>
-            {/* Header */}
-            <View style={styles.header}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                    <Ionicons name="arrow-back" size={22} color="#111" />
+            {/* Header / Top Bar */}
+            <View style={styles.topBar}>
+                <TouchableOpacity onPress={() => router.back()} style={styles.backBtnText}>
+                    <Ionicons name="chevron-back" size={18} color="#4b5563" />
+                    <Text style={{ fontWeight: '600', color: '#4b5563', fontSize: 14 }}>Back</Text>
                 </TouchableOpacity>
-                <View style={{ flex: 1 }}>
-                    <Text style={styles.headerTitle}>Assign Tenant</Text>
-                    <Text style={styles.headerSub} numberOfLines={1}>{property?.title || 'Property'}</Text>
-                </View>
-                {/* <TouchableOpacity onPress={() => router.back()} style={styles.closeBtn}>
-                    <Ionicons name="close" size={20} color="#666" />
-                </TouchableOpacity> */}
+                <Text style={styles.stepCounterText}>STEP {step + 1} OF {STEPS.length}</Text>
+                <View style={{ width: 60 }} />
+            </View>
+
+            {/* Progress Bar */}
+            <View style={styles.progressBarContainer}>
+                <View style={[styles.progressBarFill, { width: `${((step + 1) / STEPS.length) * 100}%` }]} />
             </View>
 
             <ScrollView contentContainerStyle={styles.scrollContent}>
-                {/* Select Tenant Section */}
-                <View style={styles.section}>
-                    <View style={styles.sectionHeader}>
-                        <Ionicons name="people" size={18} color="#111" />
-                        <Text style={styles.sectionTitle}>Select Tenant to Assign</Text>
+                {/* Page Title */}
+                <View style={styles.titleContainer}>
+                    <View style={styles.titleIconBox}>
+                        <Ionicons name="person-add" size={20} color="white" />
                     </View>
+                    <View>
+                        <Text style={styles.pageTitle}>Assign Tenant</Text>
+                        <Text style={styles.pageSubtitle}>Select a tenant and setup the contract</Text>
+                    </View>
+                </View>
 
-                    {approvedBookings.length === 0 ? (
-                        <View style={styles.emptyTenants}>
-                            <Ionicons name="alert-circle-outline" size={24} color="#f59e0b" />
-                            <Text style={styles.emptyTenantsText}>No approved bookings found.</Text>
-                        </View>
-                    ) : (
-                        approvedBookings.map((item) => {
-                            const isSelected = selectedTenant?.id === item.id;
-                            const name = `${item.tenant_profile?.first_name || ''} ${item.tenant_profile?.last_name || ''}`.trim();
-                            return (
-                                <TouchableOpacity
-                                    key={item.id}
-                                    style={[styles.tenantCard, isSelected && styles.tenantCardSelected]}
-                                    onPress={() => setSelectedTenant(item)}
-                                    activeOpacity={0.8}
-                                >
-                                    <View style={[styles.tenantAvatar, isSelected && { backgroundColor: '#111' }]}>
-                                        <Text style={[styles.tenantAvatarText, isSelected && { color: 'white' }]}>
-                                            {(item.tenant_profile?.first_name || '?')[0].toUpperCase()}
-                                        </Text>
+                {/* Stepper Pills */}
+                <View style={styles.stepperContainer}>
+                    {STEPS.map((s, i) => {
+                        const isPast = i < step;
+                        const isCurrent = i === step;
+                        return (
+                            <View key={i} style={{ flex: 1, marginHorizontal: 2 }}>
+                                <View style={[
+                                    styles.stepperLine,
+                                    isPast ? { backgroundColor: '#10b981' } : isCurrent ? { backgroundColor: '#111' } : { backgroundColor: '#e5e7eb' }
+                                ]} />
+                                <View style={styles.stepperLabelContainer}>
+                                    <View style={[
+                                        styles.stepperNumber,
+                                        isPast ? { backgroundColor: '#10b981' } : isCurrent ? { backgroundColor: '#111' } : { backgroundColor: '#e5e7eb' }
+                                    ]}>
+                                        {isPast ? <Ionicons name="checkmark" size={10} color="white" /> : <Text style={[styles.stepperNumberText, (isPast || isCurrent) && { color: 'white' }]}>{i + 1}</Text>}
                                     </View>
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={[styles.tenantName, isSelected && { color: 'white' }]}>{name || 'Unknown'}</Text>
-                                        <Text style={[styles.tenantPhone, isSelected && { color: 'rgba(255,255,255,0.7)' }]}>
-                                            {item.tenant_profile?.phone || 'No phone'}
-                                        </Text>
-                                    </View>
-                                    <View style={[styles.radioOuter, isSelected && styles.radioOuterSelected]}>
-                                        {isSelected && <View style={styles.radioInner} />}
-                                    </View>
-                                </TouchableOpacity>
-                            );
-                        })
-                    )}
+                                    <Text style={[styles.stepperLabel, isCurrent && { color: '#111', fontWeight: 'bold' }]}>{s.label}</Text>
+                                </View>
+                            </View>
+                        );
+                    })}
                 </View>
 
-                {/* Contract Details */}
-                <View style={styles.section}>
-                    <View style={styles.sectionHeader}>
-                        <Ionicons name="document-text" size={18} color="#111" />
-                        <Text style={styles.sectionTitle}>Contract Details</Text>
-                    </View>
-
-                    <Text style={styles.label}>Start Date *</Text>
-                    <TextInput
-                        style={styles.input}
-                        value={startDate}
-                        onChangeText={setStartDate}
-                        placeholder="YYYY-MM-DD"
-                        placeholderTextColor="#c4c4c4"
-                    />
-
-                    <Text style={styles.label}>Contract Duration (Months) *</Text>
-                    <TextInput
-                        style={styles.input}
-                        value={contractMonths}
-                        onChangeText={setContractMonths}
-                        keyboardType="numeric"
-                        placeholder="12"
-                        placeholderTextColor="#c4c4c4"
-                    />
-                    <Text style={styles.hint}>Minimum 3 months. Enter how many months the contract will last.</Text>
-
-                    <Text style={styles.label}>End Date (Auto-calculated)</Text>
-                    <View style={styles.readonlyInput}>
-                        <Text style={styles.readonlyText}>{endDate ? formatDate(endDate) : 'Enter valid start date and duration'}</Text>
-                    </View>
-                    <Text style={styles.hint}>Automatically calculated based on start date and contract duration</Text>
+                {/* Step Content */}
+                <View style={styles.stepContentCard}>
+                    {renderStepContent()}
                 </View>
 
-                {/* Move-in Payment Summary */}
-                <View style={styles.section}>
-                    <View style={styles.sectionHeader}>
-                        <Ionicons name="wallet" size={18} color="#111" />
-                        <Text style={styles.sectionTitle}>Move-in Payment Summary</Text>
-                    </View>
-
-                    <View style={styles.summaryCard}>
-                        <View style={styles.summaryRow}>
-                            <Text style={styles.summaryLabel}>Rent (1 Month):</Text>
-                            <Text style={styles.summaryValue}>₱{rentAmount.toLocaleString()}</Text>
-                        </View>
-                        <View style={styles.summaryRow}>
-                            <Text style={styles.summaryLabel}>Advance (1 Month):</Text>
-                            <Text style={styles.summaryValue}>₱{advanceAmount.toLocaleString()}</Text>
-                        </View>
-                        <View style={styles.summaryRow}>
-                            <Text style={styles.summaryLabel}>Security Deposit:</Text>
-                            <Text style={styles.summaryValue}>₱{securityDeposit.toLocaleString()}</Text>
-                        </View>
-                        <View style={styles.summaryDivider} />
-                        <View style={styles.summaryRow}>
-                            <Text style={styles.summaryTotalLabel}>Total Move-in:</Text>
-                            <Text style={styles.summaryTotalValue}>₱{totalMoveIn.toLocaleString()}</Text>
-                        </View>
-                    </View>
-                </View>
-
-                {/* Contract PDF */}
-                <View style={styles.section}>
-                    <Text style={styles.label}>Contract PDF *</Text>
-                    <TouchableOpacity style={styles.uploadBtn} onPress={pickContractPdf} activeOpacity={0.8}>
-                        <Ionicons name={contractPdf ? "document-attach" : "cloud-upload-outline"} size={22} color={contractPdf ? "#059669" : "#9ca3af"} />
-                        <Text style={[styles.uploadBtnText, contractPdf && { color: '#059669' }]}>
-                            {contractPdf ? contractPdf.name : 'Click to upload contract PDF'}
-                        </Text>
-                    </TouchableOpacity>
-                </View>
-
-                {/* Fees & Utilities */}
-                <View style={styles.section}>
-                    <View style={styles.sectionHeader}>
-                        <Ionicons name="cash" size={18} color="#111" />
-                        <Text style={styles.sectionTitle}>Fees & Utilities</Text>
-                    </View>
-
-                    <Text style={styles.label}>Late Payment Fee (₱) *</Text>
-                    <TextInput
-                        style={styles.input}
-                        value={lateFee}
-                        onChangeText={setLateFee}
-                        keyboardType="numeric"
-                        placeholder="e.g. 500"
-                        placeholderTextColor="#c4c4c4"
-                    />
-
-                    <View style={styles.infoBox}>
-                        <Ionicons name="information-circle" size={16} color="#6366f1" />
-                        <Text style={styles.infoText}>
-                            Utility Reminders: Tenants will receive SMS & email reminders 3 days before due dates (no payment bills created).
-                        </Text>
-                    </View>
-
-                    <Text style={styles.label}>Wifi Due Day *</Text>
-
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-start', marginTop: 5 }}>
-                        {Array.from({ length: 31 }, (_, i) => i + 1).map(day => (
-                            <TouchableOpacity
-                                key={day}
-                                onPress={() => setWifiDueDay(day.toString())}
-                                style={{
-                                    width: 36, height: 36, borderRadius: 18,
-                                    backgroundColor: wifiDueDay === day.toString() ? 'black' : 'white',
-                                    alignItems: 'center', justifyContent: 'center',
-                                    borderWidth: 1, borderColor: wifiDueDay === day.toString() ? 'black' : '#e5e7eb'
-                                }}
-                            >
-                                <Text style={{ fontSize: 12, fontWeight: 'bold', color: wifiDueDay === day.toString() ? 'white' : '#374151' }}>{day}</Text>
-                            </TouchableOpacity>
-                        ))}
-                    </View>
-
-                    <View style={styles.infoBox}>
-                        <Ionicons name="flash" size={16} color="#f59e0b" />
-                        <Text style={styles.infoText}>
-                            Note: Electricity reminders are sent automatically (due date is always 1st week of the month).
-                        </Text>
-                    </View>
-                </View>
-
-                {/* Spacer for bottom button */}
+                {/* Spacer */}
                 <View style={{ height: 100 }} />
             </ScrollView>
 
-            {/* Fixed Bottom Button */}
-            <View style={styles.bottomBar}>
-                <TouchableOpacity
-                    style={[styles.assignBtn, (!selectedTenant || submitting) && { opacity: 0.5 }]}
-                    onPress={handleAssign}
-                    disabled={!selectedTenant || submitting}
-                    activeOpacity={0.8}
-                >
-                    {submitting ? (
-                        <ActivityIndicator color="white" size="small" />
-                    ) : (
-                        <>
-                            <Ionicons name="checkmark-circle" size={20} color="white" />
-                            <Text style={styles.assignBtnText}>Assign Tenant</Text>
-                        </>
-                    )}
-                </TouchableOpacity>
+            {/* Bottom Actions */}
+            <View style={styles.bottomActions}>
+                {step > 0 && (
+                    <TouchableOpacity style={styles.wizardBtnSecondary} onPress={prevStep}>
+                        <Text style={styles.wizardBtnSecondaryText}>Back</Text>
+                    </TouchableOpacity>
+                )}
+                {step < STEPS.length - 1 ? (
+                    <TouchableOpacity style={styles.wizardBtnPrimary} onPress={nextStep}>
+                        <Text style={styles.wizardBtnPrimaryText}>Continue</Text>
+                    </TouchableOpacity>
+                ) : (
+                    <TouchableOpacity
+                        style={[styles.wizardBtnPrimary, submitting && { opacity: 0.7 }]}
+                        onPress={handleAssign}
+                        disabled={submitting}
+                    >
+                        {submitting ? <ActivityIndicator color="white" size="small" /> : <Text style={styles.wizardBtnPrimaryText}>Assign Tenant</Text>}
+                    </TouchableOpacity>
+                )}
             </View>
         </SafeAreaView>
     );
@@ -452,30 +510,42 @@ export default function AssignTenantScreen() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#f9fafb' },
 
-    header: {
-        flexDirection: 'row', alignItems: 'center', gap: 12,
-        paddingHorizontal: 20, paddingVertical: 14,
-        backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: '#f3f4f6'
+    // Top Bar
+    topBar: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+        paddingHorizontal: 20, paddingVertical: 14, backgroundColor: 'white'
     },
-    backBtn: {
-        width: 40, height: 40, borderRadius: 12,
-        backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center'
+    backBtnText: {
+        flexDirection: 'row', alignItems: 'center', gap: 4
     },
-    closeBtn: {
-        width: 36, height: 36, borderRadius: 18,
-        backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center'
-    },
-    headerTitle: { fontSize: 20, fontWeight: '800', color: '#111' },
-    headerSub: { fontSize: 12, color: '#9ca3af', marginTop: 1 },
+    stepCounterText: { fontSize: 11, fontWeight: '800', color: '#9ca3af', letterSpacing: 1 },
+
+    // Progress Bar
+    progressBarContainer: { height: 3, backgroundColor: '#f3f4f6', width: '100%' },
+    progressBarFill: { height: '100%', backgroundColor: '#111', borderTopRightRadius: 3, borderBottomRightRadius: 3 },
+
+    // Title
+    titleContainer: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 24, marginTop: 10 },
+    titleIconBox: { width: 44, height: 44, borderRadius: 12, backgroundColor: '#111', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10 },
+    pageTitle: { fontSize: 24, fontWeight: '900', color: '#111', letterSpacing: -0.5 },
+    pageSubtitle: { fontSize: 13, color: '#6b7280', marginTop: 2 },
+
+    // Stepper
+    stepperContainer: { flexDirection: 'row', marginBottom: 24 },
+    stepperLine: { height: 6, borderRadius: 3, width: '100%' },
+    stepperLabelContainer: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 },
+    stepperNumber: { width: 16, height: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+    stepperNumberText: { fontSize: 9, fontWeight: '900', color: '#9ca3af' },
+    stepperLabel: { fontSize: 11, fontWeight: '600', color: '#9ca3af' },
 
     scrollContent: { padding: 20 },
 
-    section: {
-        backgroundColor: 'white', borderRadius: 16, padding: 16,
-        marginBottom: 16, borderWidth: 1, borderColor: '#f3f4f6'
+    stepContentCard: {
+        backgroundColor: 'white', borderRadius: 20, padding: 20,
+        borderWidth: 1, borderColor: '#f3f4f6', shadowColor: '#000', shadowOpacity: 0.02,
+        shadowRadius: 15, elevation: 2
     },
-    sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 },
-    sectionTitle: { fontSize: 16, fontWeight: '700', color: '#111' },
+    stepContainer: { width: '100%' },
 
     // Tenant Cards
     emptyTenants: {
@@ -490,79 +560,87 @@ const styles = StyleSheet.create({
         backgroundColor: 'white', marginBottom: 8
     },
     tenantCardSelected: {
-        backgroundColor: '#111', borderColor: '#111'
+        backgroundColor: '#f9fafb', borderColor: '#111'
     },
     tenantAvatar: {
         width: 44, height: 44, borderRadius: 22,
-        backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center'
+        backgroundColor: '#e5e7eb', alignItems: 'center', justifyContent: 'center'
     },
-    tenantAvatarText: { fontSize: 18, fontWeight: '800', color: '#666' },
+    tenantAvatarText: { fontSize: 18, fontWeight: '800', color: '#6b7280' },
     tenantName: { fontSize: 15, fontWeight: '700', color: '#111' },
-    tenantPhone: { fontSize: 12, color: '#9ca3af', marginTop: 1 },
+    tenantPhone: { fontSize: 12, color: '#6b7280', marginTop: 1 },
 
     radioOuter: {
         width: 22, height: 22, borderRadius: 11,
         borderWidth: 2, borderColor: '#d1d5db', alignItems: 'center', justifyContent: 'center'
     },
-    radioOuterSelected: { borderColor: 'white' },
-    radioInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: 'white' },
+    radioOuterSelected: { borderColor: '#111' },
+    radioInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#111' },
 
     // Form
     label: {
-        fontSize: 12, fontWeight: '700', color: '#374151',
-        textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6, marginTop: 14
+        fontSize: 12, fontWeight: '800', color: '#374151',
+        marginBottom: 8, marginTop: 16, paddingLeft: 4
     },
     input: {
-        backgroundColor: '#f9fafb', borderWidth: 1.5, borderColor: '#e5e7eb',
-        borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12,
+        backgroundColor: 'white', borderWidth: 1, borderColor: '#e5e7eb',
+        borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14,
         fontSize: 15, color: '#111', fontWeight: '500'
     },
     readonlyInput: {
-        backgroundColor: '#f3f4f6', borderWidth: 1.5, borderColor: '#e5e7eb',
-        borderRadius: 12, paddingHorizontal: 14, paddingVertical: 14
+        backgroundColor: '#f9fafb', borderWidth: 1, borderColor: '#e5e7eb',
+        borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14
     },
     readonlyText: { fontSize: 15, color: '#6b7280', fontWeight: '500' },
-    hint: { fontSize: 11, color: '#9ca3af', marginTop: 4, lineHeight: 16 },
+    hint: { fontSize: 11, color: '#9ca3af', marginTop: 6, paddingLeft: 4, lineHeight: 16 },
 
     // Summary
     summaryCard: {
-        backgroundColor: '#f9fafb', borderRadius: 14, padding: 16,
-        borderWidth: 1, borderColor: '#e5e7eb'
+        marginTop: 20, backgroundColor: '#f9fafb', borderRadius: 16, padding: 16,
+        borderWidth: 1, borderColor: '#f3f4f6'
     },
+    summaryTitle: { fontSize: 13, fontWeight: '800', color: '#374151', marginBottom: 12 },
     summaryRow: {
         flexDirection: 'row', justifyContent: 'space-between',
-        alignItems: 'center', paddingVertical: 8
+        alignItems: 'center', paddingVertical: 6
     },
-    summaryLabel: { fontSize: 14, color: '#6b7280' },
-    summaryValue: { fontSize: 14, fontWeight: '600', color: '#111' },
-    summaryDivider: { height: 1, backgroundColor: '#e5e7eb', marginVertical: 4 },
-    summaryTotalLabel: { fontSize: 15, fontWeight: '800', color: '#111' },
-    summaryTotalValue: { fontSize: 18, fontWeight: '900', color: '#059669' },
+    summaryLabel: { fontSize: 13, color: '#6b7280' },
+    summaryValue: { fontSize: 13, fontWeight: '700', color: '#111' },
+    summaryDivider: { height: 1, backgroundColor: '#e5e7eb', marginVertical: 8 },
+    summaryTotalLabel: { fontSize: 14, fontWeight: '800', color: '#111' },
+    summaryTotalValue: { fontSize: 16, fontWeight: '900', color: '#111' },
 
     // Upload
     uploadBtn: {
-        flexDirection: 'row', alignItems: 'center', gap: 10,
-        padding: 16, borderRadius: 12, borderWidth: 1.5,
-        borderColor: '#e5e7eb', borderStyle: 'dashed', backgroundColor: '#fafafa'
+        flexDirection: 'row', alignItems: 'center', gap: 10, justifyContent: 'center',
+        padding: 24, borderRadius: 16, borderWidth: 2,
+        borderColor: '#e5e7eb', borderStyle: 'dashed', backgroundColor: '#f9fafb'
     },
     uploadBtnText: { fontSize: 14, color: '#9ca3af', fontWeight: '600' },
 
     // Info
     infoBox: {
-        flexDirection: 'row', gap: 8, marginTop: 10,
-        padding: 12, backgroundColor: '#f0f0ff', borderRadius: 10
+        flexDirection: 'row', gap: 10, marginTop: 16,
+        padding: 14, backgroundColor: '#eef2ff', borderRadius: 12
     },
-    infoText: { fontSize: 11, color: '#4b5563', lineHeight: 16, flex: 1 },
+    infoText: { fontSize: 12, color: '#4f46e5', fontWeight: '500', lineHeight: 18, flex: 1 },
 
-    // Bottom
-    bottomBar: {
+    // Bottom Wizard Actions
+    bottomActions: {
         position: 'absolute', bottom: 0, left: 0, right: 0,
+        flexDirection: 'row', gap: 12,
         padding: 20, paddingBottom: 34,
         backgroundColor: 'white', borderTopWidth: 1, borderTopColor: '#f3f4f6'
     },
-    assignBtn: {
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-        backgroundColor: '#111', paddingVertical: 16, borderRadius: 14
+    wizardBtnPrimary: {
+        flex: 1, backgroundColor: '#111', paddingVertical: 16, borderRadius: 14,
+        alignItems: 'center', justifyContent: 'center'
     },
-    assignBtnText: { fontSize: 16, fontWeight: '700', color: 'white' },
+    wizardBtnPrimaryText: { fontSize: 15, fontWeight: '800', color: 'white' },
+    wizardBtnSecondary: {
+        paddingHorizontal: 24, paddingVertical: 16, borderRadius: 14,
+        backgroundColor: 'white', borderWidth: 1, borderColor: '#d1d5db',
+        alignItems: 'center', justifyContent: 'center'
+    },
+    wizardBtnSecondaryText: { fontSize: 15, fontWeight: '700', color: '#374151' },
 });
