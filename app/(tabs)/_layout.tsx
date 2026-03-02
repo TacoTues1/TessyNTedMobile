@@ -1,8 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Tabs } from 'expo-router';
+import { Tabs, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { AppState, Platform, Text, View } from 'react-native';
+import { AppState, Platform, Text, TouchableOpacity, View } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { supabase } from '../../lib/supabase';
+
+const AnimatedTouchableOpacity = Animated.createAnimatedComponent(TouchableOpacity);
 
 // Helper to avoid simultaneous getSession calls during mount which causes token refresh race conditions
 let sessionPromise: Promise<any> | null = null;
@@ -171,7 +174,7 @@ function MessagesTabIcon({ color, focused }: { color: string; focused: boolean }
   const badgeValue = unreadCount > 9 ? '9+' : String(unreadCount);
 
   return (
-    <View style={{ width: 28, height: 28, alignItems: 'center', justifyContent: 'center' }}>
+    <View style={{ width: 24, height: 24, alignItems: 'center', justifyContent: 'center' }}>
       <Ionicons
         name={focused ? 'chatbubble-ellipses' : 'chatbubble-ellipses-outline'}
         size={22}
@@ -181,16 +184,16 @@ function MessagesTabIcon({ color, focused }: { color: string; focused: boolean }
         <View
           style={{
             position: 'absolute',
-            top: -2,
-            right: -6,
+            top: -6,
+            right: -8,
             minWidth: 16,
             height: 16,
             borderRadius: 8,
-            backgroundColor: 'red',
+            backgroundColor: '#FF3B30',
             alignItems: 'center',
             justifyContent: 'center',
             borderWidth: 1.5,
-            borderColor: 'white',
+            borderColor: '#fff',
             paddingHorizontal: 3
           }}
         >
@@ -201,25 +204,121 @@ function MessagesTabIcon({ color, focused }: { color: string; focused: boolean }
   );
 }
 
-const TAB_STYLE: any = {
-  height: 60,
-  borderTopWidth: 1,
-  borderTopColor: '#f0f0f0',
-  backgroundColor: '#fff',
-  elevation: 0,
-  paddingBottom: Platform.OS === 'ios' ? 8 : 4,
+const VISIBLE_TABS = ['index', 'allproperties', 'messages', 'profile'];
+
+const CustomTabBar = ({ state, descriptors, navigation }: any) => {
+  const router = useRouter();
+  const routes = state.routes.filter(
+    (route: any) => VISIBLE_TABS.includes(route.name)
+  );
+
+  return (
+    <View
+      style={{
+        position: 'absolute',
+        bottom: Platform.OS === 'ios' ? 34 : 16,
+        left: 16,
+        right: 16,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+      }}
+    >
+      <View
+        style={{
+          flex: 1,
+          flexDirection: 'row',
+          backgroundColor: '#ffffff',
+          borderRadius: 40,
+          borderWidth: 1.5,
+          borderColor: '#E8E8E8',
+          paddingHorizontal: 8,
+          height: 60,
+          elevation: 5,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.08,
+          shadowRadius: 10,
+          alignItems: 'center',
+        }}
+      >
+        {routes.map((route: any) => {
+          const { options } = descriptors[route.key];
+          const isFocused = state.index === state.routes.indexOf(route);
+
+          const onPress = () => {
+            const event = navigation.emit({
+              type: 'tabPress',
+              target: route.key,
+              canPreventDefault: true,
+            });
+
+            if (!isFocused && !event.defaultPrevented) {
+              navigation.navigate(route.name, route.params);
+            }
+          };
+
+          return (
+            <TouchableOpacity
+              key={route.key}
+              onPress={onPress}
+              activeOpacity={0.7}
+              style={{
+                flex: isFocused ? 2 : 1,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: isFocused ? '#F0F1F3' : 'transparent',
+                paddingVertical: 10,
+                borderRadius: 24,
+                marginHorizontal: 3,
+              }}
+            >
+              {options.tabBarIcon
+                ? options.tabBarIcon({ focused: isFocused, color: isFocused ? '#000' : '#999', size: 22 })
+                : null}
+              {isFocused && options.title && (
+                <Text
+                  style={{ marginLeft: 6, fontWeight: '700', fontSize: 12, color: '#000' }}
+                  numberOfLines={1}
+                >
+                  {options.title}
+                </Text>
+              )}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      <TouchableOpacity
+        activeOpacity={0.7}
+        style={{
+          width: 56,
+          height: 56,
+          borderRadius: 28,
+          backgroundColor: '#000',
+          elevation: 5,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.15,
+          shadowRadius: 10,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+        onPress={() => router.push('/properties/new')}
+      >
+        <Ionicons name="add" size={28} color="#fff" />
+      </TouchableOpacity>
+    </View>
+  );
 };
 
 export default function TabLayout() {
   return (
     <Tabs
+      tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{
-        tabBarActiveTintColor: 'black',
-        tabBarInactiveTintColor: '#999',
-        tabBarShowLabel: true,
         headerShown: false,
-        tabBarStyle: TAB_STYLE,
-        tabBarLabelStyle: { fontSize: 10, fontWeight: '600' },
       }}
     >
       <Tabs.Screen
@@ -236,7 +335,7 @@ export default function TabLayout() {
           tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? "business" : "business-outline"} size={22} color={color} />
         }}
       />
-      <Tabs.Screen name="landlordproperties" options={{ href: null, tabBarStyle: { ...TAB_STYLE, display: 'flex' } }} />
+      <Tabs.Screen name="landlordproperties" options={{ href: null }} />
       <Tabs.Screen
         name="messages"
         options={{
@@ -255,14 +354,14 @@ export default function TabLayout() {
       />
 
       {/* Hidden Screens */}
-      <Tabs.Screen name="notifications" options={{ href: null, tabBarStyle: { display: 'none' } }} />
-      <Tabs.Screen name="maintenance" options={{ href: null, tabBarStyle: { ...TAB_STYLE, display: 'flex' } }} />
-      <Tabs.Screen name="payments" options={{ href: null, tabBarStyle: { ...TAB_STYLE, display: 'flex' } }} />
-      <Tabs.Screen name="schedule" options={{ href: null, tabBarStyle: { ...TAB_STYLE, display: 'flex' } }} />
-      <Tabs.Screen name="bookings" options={{ href: null, tabBarStyle: { ...TAB_STYLE, display: 'flex' } }} />
-      <Tabs.Screen name="applications" options={{ href: null, tabBarStyle: { ...TAB_STYLE, display: 'flex' } }} />
-      <Tabs.Screen name="terms" options={{ href: null, tabBarStyle: { display: 'none' } }} />
-      <Tabs.Screen name="assigntenant" options={{ href: null, tabBarStyle: { ...TAB_STYLE, display: 'flex' } }} />
+      <Tabs.Screen name="notifications" options={{ href: null }} />
+      <Tabs.Screen name="maintenance" options={{ href: null }} />
+      <Tabs.Screen name="payments" options={{ href: null }} />
+      <Tabs.Screen name="schedule" options={{ href: null }} />
+      <Tabs.Screen name="bookings" options={{ href: null }} />
+      <Tabs.Screen name="applications" options={{ href: null }} />
+      <Tabs.Screen name="terms" options={{ href: null }} />
+      <Tabs.Screen name="assigntenant" options={{ href: null }} />
     </Tabs>
   );
 }

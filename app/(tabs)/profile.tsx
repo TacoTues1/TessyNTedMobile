@@ -17,6 +17,8 @@ import {
   View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import PrivacyView from '../../components/profile/PrivacyView';
+import TermsView from '../../components/profile/TermsView';
 import { supabase } from '../../lib/supabase';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || '';
@@ -27,7 +29,7 @@ export default function Profile() {
   const [loading, setLoading] = useState(true);
 
   // --- VIEW STATE ---
-  const [currentView, setCurrentView] = useState<'menu' | 'personal' | 'security' | 'notifications'>('menu');
+  const [currentView, setCurrentView] = useState<'menu' | 'personal' | 'security' | 'notifications' | 'terms' | 'privacy'>('menu');
 
   // --- PROFILE STATE ---
   const [firstName, setFirstName] = useState('');
@@ -314,6 +316,13 @@ export default function Profile() {
             <MenuRow icon="notifications-outline" label="Notifications" onPress={() => setCurrentView('notifications')} />
           </View>
 
+          {/* Legal Section */}
+          <Text style={styles.sectionHeader}>Legal</Text>
+          <View style={styles.menuSection}>
+            <MenuRow icon="document-text-outline" label="Terms of Service" onPress={() => setCurrentView('terms')} />
+            <MenuRow icon="shield-checkmark-outline" label="Privacy Policy" onPress={() => setCurrentView('privacy')} />
+          </View>
+
           {/* Logout Section */}
           <View style={[styles.menuSection, { marginTop: 20 }]}>
             <MenuRow icon="log-out-outline" label="Sign Out" onPress={handleSignOut} danger />
@@ -480,6 +489,15 @@ export default function Profile() {
         </ScrollView>
       </SafeAreaView>
     );
+  }
+
+  // --- LEGAL SUB-VIEWS ---
+  if (currentView === 'terms') {
+    return <TermsView onBack={() => setCurrentView('menu')} />;
+  }
+
+  if (currentView === 'privacy') {
+    return <PrivacyView onBack={() => setCurrentView('menu')} />;
   }
 
   return null;

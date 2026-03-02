@@ -11,6 +11,7 @@ import {
   Dimensions,
   Image,
   Linking,
+  Modal,
   ScrollView, StyleSheet,
   Text, TextInput,
   TouchableOpacity,
@@ -27,6 +28,13 @@ export default function NewProperty() {
   const [uploading, setUploading] = useState(false);
   const [uploadingTerms, setUploadingTerms] = useState(false); // New: PDF State
   const [showAllAmenities, setShowAllAmenities] = useState(false); // New: Amenities Toggle
+  const [showStatusPicker, setShowStatusPicker] = useState(false);
+
+  const statuses = [
+    { label: 'Available', value: 'available' },
+    { label: 'Occupied', value: 'occupied' },
+    { label: 'Unavailable', value: 'not available' }
+  ];
 
   const [form, setForm] = useState({
     title: '',
@@ -47,17 +55,29 @@ export default function NewProperty() {
     bathrooms: '1',
     area_sqft: '',
     status: 'available',
+    property_type: 'House Apartment',
+    bed_type: 'Single Bed',
+    max_occupancy: '1',
+    has_security_deposit: true,
+    security_deposit_amount: '',
+    deposit_same_as_rent: true,
+    has_advance: true,
+    advance_amount: '',
+    advance_same_as_rent: true,
+    min_contract_months: '',
     terms_conditions: '',
     amenities: [] as string[],
     images: [] as string[]
   });
 
+  const propertyTypes = ['House Apartment', 'Studio Type', 'Solo Room', 'Boarding House'];
+  const bedTypes = ['Single Bed', 'Double Bed', 'Triple Bed'];
+
   const availableAmenities = [
-    'Wifi', 'Air Condition', 'Washing Machine', 'Parking',
-    'Hot Shower', 'Bathroom', 'Smoke Alarm', 'Veranda',
-    'Fire Extinguisher', 'Outside Garden', 'Furnished',
-    'Semi-Furnished', 'Pet Friendly', 'Kitchen', 'Smart TV',
-    'Pool', 'Elevator', 'Gym', 'Security', 'Balcony'
+    'Kitchen', 'Wifi', 'Pool', 'TV', 'Elevator', 'Air conditioning', 'Heating',
+    'Washing machine', 'Dryer', 'Parking', 'Gym', 'Security', 'Balcony', 'Garden',
+    'Pet friendly', 'Furnished', 'Carbon monoxide alarm', 'Smoke alarm', 'Fire extinguisher', 'First aid kit',
+    'Free Water', 'Free Electricity', 'Free WiFi'
   ];
 
   useEffect(() => {
@@ -163,8 +183,10 @@ export default function NewProperty() {
     setLoading(true);
     const sanitize = (val: string) => (val === '' ? 0 : parseFloat(val));
 
+    const { deposit_same_as_rent, advance_same_as_rent, ...cleanedFormData } = form;
+
     const payload = {
-      ...form,
+      ...cleanedFormData,
       landlord: session.user.id,
       price: sanitize(form.price),
       utilities_cost: sanitize(form.utilities_cost),
@@ -173,7 +195,13 @@ export default function NewProperty() {
       bedrooms: sanitize(form.bedrooms),
       bathrooms: sanitize(form.bathrooms),
       area_sqft: sanitize(form.area_sqft),
-      images: form.images.length > 0 ? form.images : null
+      max_occupancy: sanitize(form.max_occupancy),
+      images: form.images.length > 0 ? form.images : null,
+      has_security_deposit: form.has_security_deposit,
+      security_deposit_amount: form.has_security_deposit ? (form.deposit_same_as_rent ? sanitize(form.price) : sanitize(form.security_deposit_amount)) : 0,
+      has_advance: form.has_advance,
+      advance_amount: form.has_advance ? (form.advance_same_as_rent ? sanitize(form.price) : sanitize(form.advance_amount)) : 0,
+      min_contract_months: sanitize(form.min_contract_months) || null
     };
 
     const { error } = await supabase.from('properties').insert(payload);
@@ -196,144 +224,308 @@ export default function NewProperty() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#FAFAFA' }}>
-      <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 100 }}>
-        <Text style={styles.header}>New Property</Text>
-        <Text style={styles.subHeader}>Create a new listing.</Text>
+    <View style={styles.container}>
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.headerArea}>
+          <Text style={styles.headerTitle}>Add Rent</Text>
+          <Text style={styles.headerSubtitle}>Create a new listing for your portfolio.</Text>
+        </View>
 
-        {/* Title */}
-        <View style={styles.section}>
-          <Text style={styles.label}>PROPERTY TITLE *</Text>
+        {/* --- Rent Title --- */}
+        <View style={styles.card}>
+          <Text style={styles.inputLabel}>RENT TITLE *</Text>
           <TextInput
-            style={styles.titleInput}
-            placeholder="e.g. Modern Loft"
+            style={styles.hugeInput}
+            placeholder="Rent Title"
             value={form.title}
             onChangeText={t => setForm({ ...form, title: t })}
           />
         </View>
 
-        {/* Location */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Location</Text>
-          <View style={styles.row}>
-            <TextInput style={[styles.input, { flex: 1, marginRight: 10 }]} placeholder="Bldg No." value={form.building_no} onChangeText={t => setForm({ ...form, building_no: t })} />
-            <TextInput style={[styles.input, { flex: 2 }]} placeholder="Street *" value={form.street} onChangeText={t => setForm({ ...form, street: t })} />
+        {/* --- Location --- */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <View style={styles.blackPill} />
+            <Text style={styles.cardTitle}>Location</Text>
           </View>
-          <TextInput style={styles.input} placeholder="Barangay/Address *" value={form.address} onChangeText={t => setForm({ ...form, address: t })} />
+
           <View style={styles.row}>
-            <TextInput style={[styles.input, { flex: 1, marginRight: 10 }]} placeholder="City *" value={form.city} onChangeText={t => setForm({ ...form, city: t })} />
-            <TextInput style={[styles.input, { flex: 1 }]} placeholder="Zip" value={form.zip} onChangeText={t => setForm({ ...form, zip: t })} />
+            <View style={[styles.fieldGroup, { flex: 1 }]}>
+              <Text style={styles.subLabel}>Bldg No.</Text>
+              <TextInput style={styles.input} placeholder="Bldg 5" value={form.building_no} onChangeText={t => setForm({ ...form, building_no: t })} />
+            </View>
+            <View style={[styles.fieldGroup, { flex: 2, marginLeft: 10 }]}>
+              <Text style={styles.subLabel}>Street *</Text>
+              <TextInput style={styles.input} placeholder="Street" value={form.street} onChangeText={t => setForm({ ...form, street: t })} />
+            </View>
           </View>
-          <TextInput style={styles.input} placeholder="Google Map Link" value={form.location_link} onChangeText={t => setForm({ ...form, location_link: t })} />
+
+          <View style={styles.row}>
+            <View style={[styles.fieldGroup, { flex: 2 }]}>
+              <Text style={styles.subLabel}>Barangay *</Text>
+              <TextInput style={styles.input} placeholder="Barangay" value={form.address} onChangeText={t => setForm({ ...form, address: t })} />
+            </View>
+            <View style={[styles.fieldGroup, { flex: 1, marginLeft: 10 }]}>
+              <Text style={styles.subLabel}>City *</Text>
+              <TextInput style={styles.input} placeholder="City" value={form.city} onChangeText={t => setForm({ ...form, city: t })} />
+            </View>
+          </View>
+
+          <View style={styles.row}>
+            <View style={[styles.fieldGroup, { flex: 1 }]}>
+              <Text style={styles.subLabel}>ZIP *</Text>
+              <TextInput style={styles.input} placeholder="" value={form.zip} onChangeText={t => setForm({ ...form, zip: t })} />
+            </View>
+          </View>
+
+          <View style={styles.fieldGroup}>
+            <Text style={styles.subLabel}>Google Map Link (Preferred)</Text>
+            <TextInput style={[styles.input, { color: '#2563EB' }]} placeholder="https://maps.app.goo.gl/..." placeholderTextColor="#9CA3AF" value={form.location_link} onChangeText={t => setForm({ ...form, location_link: t })} />
+          </View>
         </View>
 
-        {/* Details */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Details</Text>
-          <Text style={styles.label}>MONTHLY PRICE (₱) *</Text>
-          <TextInput style={[styles.input, { fontWeight: 'bold' }]} keyboardType="numeric" value={form.price} onChangeText={t => setForm({ ...form, price: t })} />
+        {/* --- Contact --- */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <View style={styles.blackPill} />
+            <Text style={styles.cardTitle}>Contact</Text>
+          </View>
+          <View style={styles.fieldGroup}>
+            <Text style={styles.subLabel}>Phone *</Text>
+            <TextInput style={styles.input} placeholder="Phone number" keyboardType="phone-pad" value={form.owner_phone} onChangeText={t => setForm({ ...form, owner_phone: t })} />
+          </View>
+          <View style={styles.fieldGroup}>
+            <Text style={styles.subLabel}>Email *</Text>
+            <TextInput style={styles.input} placeholder="Email Address" keyboardType="email-address" autoCapitalize="none" value={form.owner_email} onChangeText={t => setForm({ ...form, owner_email: t })} />
+          </View>
+        </View>
+
+        {/* --- Details --- */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <View style={styles.blackPill} />
+            <Text style={styles.cardTitle}>Details</Text>
+          </View>
+
+          <View style={styles.fieldGroup}>
+            <Text style={styles.labelDark}>Monthly Price (₱) *</Text>
+            <TextInput style={styles.inputBold} keyboardType="numeric" value={form.price} onChangeText={t => setForm({ ...form, price: t })} />
+          </View>
 
           <View style={styles.row}>
-            <View style={{ flex: 1, marginRight: 8 }}>
+            <View style={[styles.fieldGroup, { flex: 1 }]}>
               <Text style={styles.subLabel}>Beds</Text>
               <TextInput style={styles.input} keyboardType="numeric" value={form.bedrooms} onChangeText={t => setForm({ ...form, bedrooms: t })} />
             </View>
-            <View style={{ flex: 1, marginRight: 8 }}>
+            <View style={[styles.fieldGroup, { flex: 1, marginLeft: 10 }]}>
               <Text style={styles.subLabel}>Baths</Text>
               <TextInput style={styles.input} keyboardType="numeric" value={form.bathrooms} onChangeText={t => setForm({ ...form, bathrooms: t })} />
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.subLabel}>Sq Ft</Text>
+          </View>
+
+          <View style={styles.row}>
+            <View style={[styles.fieldGroup, { flex: 1 }]}>
+              <Text style={styles.subLabel}>Sqft</Text>
               <TextInput style={styles.input} keyboardType="numeric" value={form.area_sqft} onChangeText={t => setForm({ ...form, area_sqft: t })} />
             </View>
-          </View>
-
-          <Text style={styles.label}>ADDITIONAL COSTS</Text>
-          <View style={styles.row}>
-            <TextInput style={[styles.input, { flex: 1, marginRight: 5 }]} placeholder="Utilities" keyboardType="numeric" value={form.utilities_cost} onChangeText={t => setForm({ ...form, utilities_cost: t })} />
-            <TextInput style={[styles.input, { flex: 1, marginRight: 5 }]} placeholder="Internet" keyboardType="numeric" value={form.internet_cost} onChangeText={t => setForm({ ...form, internet_cost: t })} />
-            <TextInput style={[styles.input, { flex: 1 }]} placeholder="Assoc." keyboardType="numeric" value={form.association_dues} onChangeText={t => setForm({ ...form, association_dues: t })} />
-          </View>
-        </View>
-
-        {/* Contact */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Contact</Text>
-          <TextInput style={styles.input} placeholder="Phone *" keyboardType="phone-pad" value={form.owner_phone} onChangeText={t => setForm({ ...form, owner_phone: t })} />
-          <TextInput style={styles.input} placeholder="Email *" keyboardType="email-address" autoCapitalize="none" value={form.owner_email} onChangeText={t => setForm({ ...form, owner_email: t })} />
-        </View>
-
-        {/* Description & Terms */}
-        <View style={styles.section}>
-          <Text style={styles.label}>DESCRIPTION</Text>
-          <TextInput style={[styles.input, { height: 100, textAlignVertical: 'top' }]} multiline placeholder="Property description..." value={form.description} onChangeText={t => setForm({ ...form, description: t })} />
-
-          <Text style={styles.label}>TERMS & CONDITIONS (PDF)</Text>
-          {form.terms_conditions ? (
-            <View style={styles.pdfContainer}>
-              <TouchableOpacity onPress={() => Linking.openURL(form.terms_conditions)} style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Ionicons name="document-text" size={20} color="#2563eb" />
-                <Text style={{ color: '#2563eb', fontWeight: 'bold', marginLeft: 5, textDecorationLine: 'underline' }}>Terms PDF Uploaded</Text>
+            <View style={[styles.fieldGroup, { flex: 1, marginLeft: 10, position: 'relative' }]}>
+              <Text style={styles.subLabel}>Status</Text>
+              <TouchableOpacity
+                style={[styles.input, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10 }]}
+                onPress={() => setShowStatusPicker(true)}
+              >
+                <Text style={{ fontSize: 14, color: '#111' }}>
+                  {form.status === 'not available' ? 'Unavailable' : form.status === 'occupied' ? 'Occupied' : 'Available'}
+                </Text>
+                <Ionicons name="chevron-down" size={16} color="#6B7280" />
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => setForm(prev => ({ ...prev, terms_conditions: '' }))} style={{ padding: 5 }}>
-                <Text style={{ color: '#ef4444', fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase' }}>Remove</Text>
+
+              <Modal visible={showStatusPicker} transparent animationType="fade">
+                <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', zIndex: 100 }} onPress={() => setShowStatusPicker(false)}>
+                  <View style={{ backgroundColor: '#fff', width: '70%', borderRadius: 12, overflow: 'hidden' }}>
+                    {statuses.map((s, i) => (
+                      <TouchableOpacity
+                        key={s.value}
+                        style={{ padding: 16, borderBottomWidth: i === statuses.length - 1 ? 0 : 1, borderBottomColor: '#F3F4F6' }}
+                        onPress={() => { setForm({ ...form, status: s.value }); setShowStatusPicker(false); }}
+                      >
+                        <Text style={{ fontSize: 15, fontWeight: form.status === s.value ? 'bold' : 'normal', color: form.status === s.value ? '#111' : '#4B5563', textAlign: 'center' }}>{s.label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </TouchableOpacity>
+              </Modal>
+            </View>
+          </View>
+        </View>
+
+        {/* --- Payment Terms --- */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <View style={styles.blackPill} />
+            <Text style={styles.cardTitle}>Payment Terms</Text>
+          </View>
+
+          <View style={styles.toggleBox}>
+            <View style={styles.toggleRow}>
+              <Text style={styles.toggleLabel}>Require Security Deposit?</Text>
+              <TouchableOpacity onPress={() => setForm({ ...form, has_security_deposit: !form.has_security_deposit })} style={[styles.switch, form.has_security_deposit && styles.switchActive]}>
+                <View style={[styles.switchThumb, form.has_security_deposit && styles.switchThumbActive]} />
               </TouchableOpacity>
             </View>
-          ) : (
-            <Text style={{ fontSize: 12, color: '#999', fontStyle: 'italic', marginBottom: 10 }}>No custom terms uploaded.</Text>
-          )}
-
-          <TouchableOpacity onPress={pickDocument} disabled={uploadingTerms} style={styles.uploadFileBtn}>
-            {uploadingTerms ? <ActivityIndicator size="small" color="black" /> : (
-              <>
-                <Ionicons name="cloud-upload-outline" size={20} color="black" />
-                <Text style={{ fontWeight: 'bold', marginLeft: 8 }}>Upload Terms PDF</Text>
-              </>
+            {form.has_security_deposit && (
+              <View style={{ marginTop: 10 }}>
+                <TouchableOpacity onPress={() => setForm({ ...form, deposit_same_as_rent: !form.deposit_same_as_rent })} style={styles.checkboxRow}>
+                  <Ionicons name={form.deposit_same_as_rent ? "checkbox" : "square-outline"} size={20} color="black" />
+                  <Text style={styles.checkboxLabel}>Same as monthly rent</Text>
+                </TouchableOpacity>
+                {!form.deposit_same_as_rent && (
+                  <TextInput style={[styles.input, { marginTop: 10, marginBottom: 0 }]} placeholder="Amount (₱)" keyboardType="numeric" value={form.security_deposit_amount} onChangeText={t => setForm({ ...form, security_deposit_amount: t })} />
+                )}
+              </View>
             )}
-          </TouchableOpacity>
+          </View>
+
+          <View style={styles.toggleBox}>
+            <View style={styles.toggleRow}>
+              <Text style={styles.toggleLabel}>Require Advance Payment?</Text>
+              <TouchableOpacity onPress={() => setForm({ ...form, has_advance: !form.has_advance })} style={[styles.switch, form.has_advance && styles.switchActive]}>
+                <View style={[styles.switchThumb, form.has_advance && styles.switchThumbActive]} />
+              </TouchableOpacity>
+            </View>
+            {form.has_advance && (
+              <View style={{ marginTop: 10 }}>
+                <TouchableOpacity onPress={() => setForm({ ...form, advance_same_as_rent: !form.advance_same_as_rent })} style={styles.checkboxRow}>
+                  <Ionicons name={form.advance_same_as_rent ? "checkbox" : "square-outline"} size={20} color="black" />
+                  <Text style={styles.checkboxLabel}>Same as monthly rent</Text>
+                </TouchableOpacity>
+                {!form.advance_same_as_rent && (
+                  <TextInput style={[styles.input, { marginTop: 10, marginBottom: 0 }]} placeholder="Amount (₱)" keyboardType="numeric" value={form.advance_amount} onChangeText={t => setForm({ ...form, advance_amount: t })} />
+                )}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.toggleBox}>
+            <Text style={styles.toggleLabel}>Minimum Contract Duration (months)</Text>
+            <TextInput style={[styles.input, { marginTop: 8, marginBottom: 0 }]} keyboardType="numeric" placeholder="e.g. 6 (leave blank for no minimum)" value={form.min_contract_months} onChangeText={t => setForm({ ...form, min_contract_months: t })} />
+            <Text style={styles.helperText}>If set, tenants must sign for at least this many months.</Text>
+          </View>
         </View>
 
-        {/* Images */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Photos ({form.images.length}/10)</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexDirection: 'row', marginVertical: 10 }}>
-            <TouchableOpacity style={styles.addImgBtn} onPress={pickImage} disabled={uploading || form.images.length >= 10}>
-              {uploading ? <ActivityIndicator color="gray" /> : <Ionicons name="add" size={30} color="gray" />}
+        {/* --- Utilities --- */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <View style={styles.blackPill} />
+            <Text style={styles.cardTitle}>Utilities</Text>
+          </View>
+          <Text style={styles.helperText}>Toggle which utilities are included free. Non-free utilities will require a due date when assigning a tenant.</Text>
+
+          {[
+            { label: 'Water', amenity: 'Free Water', icon: 'water-outline', bg: '#EFF6FF', text: '#3B82F6' },
+            { label: 'Electricity', amenity: 'Free Electricity', icon: 'flash-outline', bg: '#FEF3C7', text: '#D97706' },
+            { label: 'WiFi', amenity: 'Free WiFi', icon: 'wifi-outline', bg: '#F3E8FF', text: '#9333EA' }
+          ].map(u => {
+            const isFree = form.amenities.includes(u.amenity);
+            return (
+              <View key={u.label} style={[styles.utilityRow, isFree && styles.utilityRowActive]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <View style={[styles.utilityIconBox, isFree ? { backgroundColor: '#D1FAE5' } : { backgroundColor: u.bg }]}>
+                    <Ionicons name={u.icon as any} size={18} color={isFree ? '#059669' : u.text} />
+                  </View>
+                  <Text style={[styles.utilityLabel, isFree && { color: '#059669' }]}>{u.label}</Text>
+                </View>
+                <TouchableOpacity
+                  style={[styles.utilityBtn, isFree && styles.utilityBtnActive]}
+                  onPress={() => toggleAmenity(u.amenity)}
+                >
+                  <Text style={[styles.utilityBtnText, isFree && styles.utilityBtnTextActive]}>{isFree ? 'Free' : 'Not Free'}</Text>
+                </TouchableOpacity>
+              </View>
+            );
+          })}
+        </View>
+
+        {/* --- Description & Terms --- */}
+        <View style={styles.card}>
+          <Text style={styles.inputLabel}>DESCRIPTION</Text>
+          <TextInput style={[styles.input, { height: 100, textAlignVertical: 'top' }]} multiline placeholder="Describe the property..." value={form.description} onChangeText={t => setForm({ ...form, description: t })} />
+
+          <Text style={[styles.inputLabel, { marginTop: 10 }]}>TERMS & CONDITIONS (PDF)</Text>
+          <View style={styles.pdfArea}>
+            {form.terms_conditions ? (
+              <View style={styles.pdfUploaded}>
+                <TouchableOpacity onPress={() => Linking.openURL(form.terms_conditions)} style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Ionicons name="document-text" size={20} color="#2563eb" />
+                  <Text style={styles.pdfLink}>View Uploaded PDF</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setForm(prev => ({ ...prev, terms_conditions: '' }))}>
+                  <Text style={styles.pdfRemove}>REMOVE</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <Text style={styles.pdfEmpty}>No custom terms uploaded. The default system terms will be used.</Text>
+            )}
+
+            <TouchableOpacity onPress={pickDocument} disabled={uploadingTerms} style={styles.uploadBtn}>
+              {uploadingTerms ? <ActivityIndicator size="small" color="white" /> : (
+                <Text style={styles.uploadBtnText}>Upload PDF</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* --- Photos --- */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitlePlain}>Photos</Text>
+          <View style={styles.photoGrid}>
+            <TouchableOpacity style={styles.photoAddBox} onPress={pickImage} disabled={uploading || form.images.length >= 10}>
+              {uploading ? <ActivityIndicator color="#9CA3AF" /> : <Text style={styles.photoAddPlus}>+</Text>}
             </TouchableOpacity>
             {form.images.map((img, idx) => (
-              <View key={idx} style={styles.imgThumbContainer}>
-                <Image source={{ uri: img }} style={styles.imgThumb} />
-                <TouchableOpacity onPress={() => removeImage(idx)} style={styles.removeImgBtn}>
-                  <Ionicons name="close" size={12} color="white" />
+              <View key={idx} style={styles.photoBox}>
+                <Image source={{ uri: img }} style={styles.photoImg} />
+                <TouchableOpacity onPress={() => removeImage(idx)} style={styles.photoRemove}>
+                  <Ionicons name="close" size={14} color="white" />
                 </TouchableOpacity>
               </View>
             ))}
-          </ScrollView>
+          </View>
+          <TouchableOpacity style={styles.uploadMultiBtn} onPress={pickImage}>
+            <Ionicons name="images-outline" size={16} color="#4B5563" />
+            <Text style={styles.uploadMultiText}>Upload Photo</Text>
+          </TouchableOpacity>
+          <Text style={[styles.helperText, { textAlign: 'center', marginTop: 8 }]}>Max 5MB per image. Up to 10 photos.</Text>
         </View>
 
-        {/* Amenities */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Amenities</Text>
-          <View style={styles.amenitiesContainer}>
+        {/* --- Amenities --- */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitlePlain}>Amenities</Text>
+          <View style={styles.amenitiesWrap}>
             {(showAllAmenities ? availableAmenities : availableAmenities.slice(0, 10)).map(amenity => (
               <TouchableOpacity
                 key={amenity}
-                style={[styles.amenityChip, form.amenities.includes(amenity) && styles.amenityChipActive]}
+                style={[styles.amenityPill, form.amenities.includes(amenity) && styles.amenityPillActive]}
                 onPress={() => toggleAmenity(amenity)}
               >
-                {form.amenities.includes(amenity) && <Ionicons name="checkmark" size={14} color="white" style={{ marginRight: 4 }} />}
-                <Text style={[styles.amenityText, form.amenities.includes(amenity) && { color: 'white' }]}>{amenity}</Text>
+                <Text style={[styles.amenityPillText, form.amenities.includes(amenity) && styles.amenityPillTextActive]}>{amenity}</Text>
               </TouchableOpacity>
             ))}
           </View>
           <TouchableOpacity onPress={() => setShowAllAmenities(!showAllAmenities)} style={{ marginTop: 15 }}>
-            <Text style={styles.toggleText}>{showAllAmenities ? 'SHOW LESS' : `SHOW ALL (${availableAmenities.length})`}</Text>
+            <Text style={styles.toggleAllText}>{showAllAmenities ? 'Show Less' : `Show All (${availableAmenities.length})`}</Text>
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity style={styles.saveBtn} onPress={handleSubmit} disabled={loading || uploading || uploadingTerms}>
-          {loading ? <ActivityIndicator color="white" /> : <Text style={styles.saveText}>List Property</Text>}
-        </TouchableOpacity>
+        {/* --- Footer Buttons --- */}
+        <View style={styles.footerRow}>
+          <TouchableOpacity style={styles.btnCancel} onPress={() => router.back()}>
+            <Text style={styles.btnCancelText}>Cancel</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.btnCreate} onPress={handleSubmit} disabled={loading || uploading || uploadingTerms}>
+            {loading ? <ActivityIndicator color="white" /> : <Text style={styles.btnCreateText}>Create</Text>}
+          </TouchableOpacity>
+        </View>
 
       </ScrollView>
     </View>
@@ -341,33 +533,76 @@ export default function NewProperty() {
 }
 
 const styles = StyleSheet.create({
-  header: { fontSize: 30, fontWeight: 'bold', color: '#111827', letterSpacing: -0.5 },
-  subHeader: { fontSize: 14, color: '#6B7280', marginBottom: 25, marginTop: 4 },
-  section: { backgroundColor: 'white', padding: 20, borderRadius: 16, marginBottom: 15, borderWidth: 1, borderColor: '#F3F4F6' },
-  sectionTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 15 },
-  label: { fontSize: 11, fontWeight: 'bold', marginBottom: 8, color: '#9CA3AF', letterSpacing: 1 },
-  subLabel: { fontSize: 12, fontWeight: '600', color: '#6B7280', marginBottom: 6 },
-  input: { borderWidth: 1, borderColor: '#E5E7EB', padding: 12, borderRadius: 10, marginBottom: 12, fontSize: 14, backgroundColor: '#FFFFFF' },
-  titleInput: { backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: 'transparent', padding: 16, borderRadius: 12, fontSize: 18, fontWeight: '600' },
+  container: { flex: 1, backgroundColor: '#FAF9F6' },
+  scrollContent: { padding: 16, paddingBottom: 100 },
+  headerArea: { marginBottom: 20, paddingHorizontal: 4 },
+  headerTitle: { fontSize: 28, fontWeight: '800', color: '#111827', letterSpacing: -0.5 },
+  headerSubtitle: { fontSize: 13, color: '#6B7280', marginTop: 2 },
+
+  card: { backgroundColor: '#FFFFFF', padding: 20, borderRadius: 16, marginBottom: 16, borderWidth: 1, borderColor: '#F3F4F6' },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  blackPill: { width: 6, height: 16, backgroundColor: '#000', borderRadius: 4, marginRight: 8 },
+  cardTitle: { fontSize: 15, fontWeight: '700', color: '#111827' },
+  cardTitlePlain: { fontSize: 15, fontWeight: '700', color: '#111827', marginBottom: 16 },
+
+  inputLabel: { fontSize: 11, fontWeight: '700', color: '#9CA3AF', marginBottom: 8, letterSpacing: 0.5 },
+  subLabel: { fontSize: 12, fontWeight: '600', color: '#6B7280', marginBottom: 6, marginLeft: 4 },
+  labelDark: { fontSize: 12, fontWeight: '700', color: '#374151', marginBottom: 6, marginLeft: 4 },
+
+  hugeInput: { backgroundColor: '#F9FAFB', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 18, fontSize: 18, borderWidth: 1, borderColor: '#F3F4F6', color: '#111' },
+  input: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, marginBottom: 16, color: '#111' },
+  inputBold: { backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, fontWeight: '700', marginBottom: 16, color: '#111' },
+
   row: { flexDirection: 'row' },
+  fieldGroup: { marginBottom: 4 },
 
-  // PDF
-  pdfContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, backgroundColor: '#eff6ff', borderRadius: 10, marginBottom: 10, borderWidth: 1, borderColor: '#dbeafe' },
-  uploadFileBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 14, backgroundColor: '#f3f4f6', borderRadius: 10, borderWidth: 1, borderColor: '#e5e7eb', borderStyle: 'dashed' },
+  toggleBox: { backgroundColor: '#F9FAFB', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: '#F3F4F6', marginBottom: 12 },
+  toggleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  toggleLabel: { fontSize: 13, fontWeight: '700', color: '#374151' },
+  switch: { width: 44, height: 24, borderRadius: 12, backgroundColor: '#E5E7EB', justifyContent: 'center', paddingHorizontal: 2 },
+  switchActive: { backgroundColor: '#000' },
+  switchThumb: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#fff', transform: [{ translateX: 0 }] },
+  switchThumbActive: { transform: [{ translateX: 20 }] },
+  checkboxRow: { flexDirection: 'row', alignItems: 'center' },
+  checkboxLabel: { fontSize: 13, fontWeight: '500', color: '#4B5563' },
+  helperText: { fontSize: 11, color: '#9CA3AF', marginTop: 4 },
 
-  // Images
-  addImgBtn: { width: 85, height: 85, borderWidth: 1, borderColor: '#D1D5DB', borderStyle: 'dashed', borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 10, backgroundColor: '#F9FAFB' },
-  imgThumbContainer: { position: 'relative', marginRight: 10 },
-  imgThumb: { width: 85, height: 85, borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' },
-  removeImgBtn: { position: 'absolute', top: -5, right: -5, backgroundColor: '#EF4444', borderRadius: 12, width: 22, height: 22, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: 'white' },
+  utilityRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 12, backgroundColor: '#F9FAFB', borderRadius: 12, borderWidth: 1, borderColor: '#F3F4F6', marginBottom: 8 },
+  utilityRowActive: { backgroundColor: '#ECFDF5', borderColor: '#A7F3D0' },
+  utilityIconBox: { width: 32, height: 32, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  utilityLabel: { fontSize: 14, fontWeight: '700', color: '#374151' },
+  utilityBtn: { backgroundColor: '#E5E7EB', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
+  utilityBtnActive: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#A7F3D0' },
+  utilityBtnText: { fontSize: 11, fontWeight: '700', color: '#6B7280' },
+  utilityBtnTextActive: { color: '#059669' },
 
-  // Amenities
-  amenitiesContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  amenityChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: 'white', flexDirection: 'row', alignItems: 'center' },
-  amenityChipActive: { backgroundColor: 'black', borderColor: 'black' },
-  amenityText: { fontSize: 12, color: '#4B5563', fontWeight: '500' },
-  toggleText: { color: 'black', fontSize: 11, fontWeight: 'bold', textAlign: 'center', textDecorationLine: 'underline' },
+  pdfArea: { backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#F3F4F6', borderRadius: 12, padding: 16 },
+  pdfUploaded: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', marginBottom: 12 },
+  pdfLink: { color: '#2563EB', fontSize: 13, fontWeight: '600', marginLeft: 6 },
+  pdfRemove: { color: '#EF4444', fontSize: 11, fontWeight: '700' },
+  pdfEmpty: { fontSize: 12, color: '#9CA3AF', marginBottom: 16, textAlign: 'center' },
+  uploadBtn: { backgroundColor: '#111', paddingVertical: 10, borderRadius: 8, alignItems: 'center' },
+  uploadBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
 
-  saveBtn: { backgroundColor: 'black', padding: 18, borderRadius: 14, alignItems: 'center', marginTop: 10 },
-  saveText: { color: '#fff', fontSize: 16, fontWeight: 'bold' }
+  photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },
+  photoAddBox: { width: 80, height: 80, borderRadius: 12, borderWidth: 1, borderColor: '#D1D5DB', borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center', backgroundColor: '#F9FAFB' },
+  photoAddPlus: { fontSize: 24, color: '#9CA3AF', fontWeight: '300' },
+  photoBox: { width: 80, height: 80, borderRadius: 12, position: 'relative' },
+  photoImg: { width: '100%', height: '100%', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB' },
+  photoRemove: { position: 'absolute', top: -6, right: -6, width: 22, height: 22, backgroundColor: '#EF4444', borderRadius: 11, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#fff' },
+  uploadMultiBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6', paddingVertical: 12, borderRadius: 10 },
+  uploadMultiText: { fontSize: 13, fontWeight: '600', color: '#4B5563', marginLeft: 8 },
+
+  amenitiesWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  amenityPill: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#fff' },
+  amenityPillActive: { backgroundColor: '#111', borderColor: '#111' },
+  amenityPillText: { fontSize: 12, color: '#4B5563', fontWeight: '500' },
+  amenityPillTextActive: { color: '#fff', fontWeight: '600' },
+  toggleAllText: { fontSize: 12, fontWeight: '700', color: '#111', textDecorationLine: 'underline' },
+
+  footerRow: { flexDirection: 'row', gap: 12, marginTop: 10, marginBottom: 40 },
+  btnCancel: { flex: 1, backgroundColor: '#fff', borderWidth: 1, borderColor: '#E5E7EB', paddingVertical: 16, borderRadius: 12, alignItems: 'center' },
+  btnCancelText: { fontSize: 15, fontWeight: '700', color: '#111' },
+  btnCreate: { flex: 1, backgroundColor: '#000', paddingVertical: 16, borderRadius: 12, alignItems: 'center' },
+  btnCreateText: { fontSize: 15, fontWeight: '700', color: '#fff' }
 });

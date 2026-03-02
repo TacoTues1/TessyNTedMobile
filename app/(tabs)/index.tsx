@@ -246,12 +246,6 @@ export default function Dashboard() {
         profile?.role === 'landlord' ? (
           <>
             <LandlordDashboard session={session} profile={profile} />
-            <TouchableOpacity
-              style={styles.floatingAddBtn}
-              onPress={() => router.push('/(tabs)/landlordproperties')}
-            >
-              <Ionicons name="add" size={28} color="white" />
-            </TouchableOpacity>
           </>
         ) : (
           <TenantDashboard session={session} profile={profile} />

@@ -41,6 +41,7 @@ export default function PropertyDetail() {
   const [landlordProfile, setLandlordProfile] = useState<any>(null);
   const [hasActiveOccupancy, setHasActiveOccupancy] = useState(false);
   const [occupiedPropertyTitle, setOccupiedPropertyTitle] = useState('');
+  const [propertyStatsInfo, setPropertyStatsInfo] = useState({ isMostFavorite: false, isTopRated: false, favoriteCount: 0, reviewCount: 0 });
 
   // Data State
   const [reviews, setReviews] = useState<any[]>([]);
@@ -101,8 +102,26 @@ export default function PropertyDetail() {
     if (id) {
       loadProperty();
       loadReviews();
+      loadPropertyStats();
     }
   }, [id]);
+
+  const loadPropertyStats = async () => {
+    const { data } = await supabase.from('property_stats').select('*');
+    if (data && id) {
+      const mostFav = data.filter((d: any) => (d.favorite_count || 0) > 0).sort((a: any, b: any) => b.favorite_count - a.favorite_count)[0]?.property_id;
+      const topRated = data.filter((d: any) => (d.review_count || 0) > 0).sort((a: any, b: any) => (b.avg_rating || 0) - (a.avg_rating || 0) || b.review_count - a.review_count)[0]?.property_id;
+
+      const currentPropStats = data.find((d: any) => d.property_id === id) || { favorite_count: 0, review_count: 0 };
+
+      setPropertyStatsInfo({
+        isMostFavorite: mostFav === id,
+        isTopRated: topRated === id,
+        favoriteCount: currentPropStats.favorite_count || 0,
+        reviewCount: currentPropStats.review_count || 0
+      });
+    }
+  };
 
   useEffect(() => {
     if (property?.landlord) {
@@ -396,6 +415,31 @@ export default function PropertyDetail() {
                   </Text>
                 </View>
               </View>
+
+              {/* Top Rated & Most Favorite Badges */}
+              {(propertyStatsInfo.isTopRated || propertyStatsInfo.isMostFavorite) && (
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+                  {propertyStatsInfo.isTopRated && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#fffbeb', paddingRight: 10, paddingLeft: 4, paddingVertical: 4, borderRadius: 12, borderColor: '#fde68a', borderWidth: 1 }}>
+                      <Image source={require('../../assets/images/toprated.png')} style={{ width: 35, height: 35, resizeMode: 'contain', marginRight: 5 }} />
+                      <View>
+                        <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#d97706', textTransform: 'uppercase' }}>Top Rated</Text>
+                        <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#92400e' }}>{propertyStatsInfo.reviewCount} Reviews</Text>
+                      </View>
+                    </View>
+                  )}
+                  {propertyStatsInfo.isMostFavorite && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff1f2', paddingRight: 10, paddingLeft: 4, paddingVertical: 4, borderRadius: 12, borderColor: '#fecdd3', borderWidth: 1 }}>
+                      <Image source={require('../../assets/images/mostfavorite.png')} style={{ width: 35, height: 35, resizeMode: 'contain', marginRight: 5 }} />
+                      <View>
+                        <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#e11d48', textTransform: 'uppercase' }}>Most Favorite</Text>
+                        <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#9f1239' }}>{propertyStatsInfo.favoriteCount} Favorites</Text>
+                      </View>
+                    </View>
+                  )}
+                </View>
+              )}
+
             </View>
             <View style={{ alignItems: 'flex-end' }}>
               <Text style={styles.price}>₱{Number(property.price).toLocaleString()}</Text>
